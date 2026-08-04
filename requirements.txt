@@ -1,0 +1,16 @@
+# PQ-VPN Python dependencies
+#
+# Setup (Ubuntu 24.04):
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#
+# click and PyYAML may be available system-wide.
+# matplotlib and psutil require the venv on PEP 668 systems.
+#
+# Additional APT dependencies:
+#   sudo apt install -y build-essential cmake ninja-build libssl-dev iperf3
+
+click>=8.0
+PyYAML>=6.0
+matplotlib>=3.8
+psutil>=5.9

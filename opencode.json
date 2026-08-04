@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "mistral": {
+      "options": {
+        "reasoning_effort": "medium"
+      }
+    }
+  }
+}

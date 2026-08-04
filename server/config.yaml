@@ -1,0 +1,8 @@
+mode: classical
+host: 0.0.0.0
+port: 14430
+tun_name: tun0
+tun_addr: 10.8.0.1/24
+tun_mtu: 1400
+cert_dir: pki/certs/classical
+groups: X25519MLKEM768

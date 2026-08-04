@@ -1,0 +1,38 @@
+# Certificates and keys (never commit private key material)
+pki/certs/
+
+# Benchmark raw data — exclude raw CSVs but keep generated plot images
+benchmark/results/*.csv
+!benchmark/results/plots/*.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# System files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Runtime artifacts
+/tmp/pqvpn.pid
+/tmp/pqvpn.sock
+/tmp/pqvpn.state
+
+# IDE
+.vscode/
+.idea/
+
+# Virtual environment
+.venv/
+
+# Graphify knowledge graph (auto-generated, not part of project)
+graphify-out/
+
+# Lock files
+.~lock.*
