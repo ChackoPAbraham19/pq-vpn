@@ -81,10 +81,64 @@
 - [ ] Run `plot_results.py` → comparison graphs
 - [ ] Sanity-check all numbers (PQC handshake slower, throughput similar)
 
-## Stage 11: Documentation + Final Polish [pending]
-- [ ] Write `docs/setup.md` (fresh reproduction guide)
-- [ ] Write `docs/architecture.md` (Mermaid diagrams)
-- [ ] Write `docs/benchmark-results.md` (interpreted results + graphs)
-- [ ] Write `README.md` (quick start + overview)
+## Stage 11: Documentation + Final Polish [completed]
+- [x] Write `docs/setup.md` (fresh reproduction guide)
+- [x] Write `docs/architecture.md` (Mermaid diagrams)
+- [x] Write `docs/benchmark-results.md` (interpreted results + graphs)
+- [x] Write `README.md` (quick start + overview)
 - [ ] Full clean-environment test (follow `docs/setup.md` from scratch)
 - [ ] Demo script runs end-to-end in <5 minutes
+
+---
+
+# Proper VPN Expansion (see docs/ROADMAP.md)
+
+## Phase 0b: Clean-build validation [pending]
+- [ ] Validate `install_custom_openssl.sh` on fresh Ubuntu 24.04 VM/container
+- [ ] Verify oqs-provider lists ML-KEM / ML-DSA
+- [ ] Write `docs/DEPLOYMENT.md` skeleton (ufw + security-group checklist)
+
+## Phase 1: Default route, NAT, DNS [pending]
+- [ ] Add frame-type control byte to `common/framing.py` (+ tests)
+- [ ] Server: persist ip_forward, MASQUERADE -o eth0, FORWARD accept, dnsmasq
+- [ ] Client: push default route metric 50; restore route + DNS on teardown
+- [ ] Control frame pushes client IP / gateway / DNS
+- [ ] Verify `curl ifconfig.me` = server IP; DNS via tunnel; UDP `-b 0` true ceiling
+
+## Phase 4-pre: `openssl_wrapper` -fd support [pending]
+- [ ] `start_tls_server()` accepts pre-connected `socket_fd` (`s_server -fd`)
+- [ ] Unit test classical + PQC handshake through -fd path
+
+## Phase 4: Multi-client [pending]
+- [ ] `server/session_manager.py`: ClientSession, IP pool (10.8.0.2-4), TUN demux
+- [ ] `server/vpn_server.py`: Python accept loop → per-client `s_server -fd`
+- [ ] status includes client table
+- [ ] `scripts/setup_routing.sh` adds vpn_ns3/ns4 client namespaces
+- [ ] Verify 2 concurrent clients + traffic isolation + iperf3 degradation curve
+
+## Phase 2: Keepalive + reconnect [pending]
+- [ ] 15s keepalive control frame; server idle teardown 3×15s
+- [ ] Client reconnect supervisor with exponential backoff (1-30s)
+- [ ] Status states: handshake-in-progress / connected / reconnecting
+- [ ] Verify auto-recovery after network drop
+
+## Phase 3: Session resumption [pending]
+- [ ] Verify TLS tickets with oqs-provider PQC groups
+- [ ] Ticket cache to ~/.pqvpn/cache/<server>.tick
+- [ ] Full vs resumed handshake benchmark → chart
+
+## Phase 5: Dashboard [pending]
+- [ ] `dashboard/dashboard_server.py` (FastAPI + WS)
+- [ ] `dashboard/index.html` (handshake/tunnels/throughput/log panels)
+- [ ] Verify ≤1s UI updates on connect/drop/reconnect
+
+## Phase 6: Report + demo prep [pending]
+- [ ] `docs/BENCHMARKS.md` (full/resumed, multi-client degradation, UDP ceiling)
+- [ ] Mermaid architecture diagram update
+- [ ] Demo script
+
+## Phase 7: Capstone — VPS deployment (payment, LAST) [pending]
+- [ ] Buy x86 VPS; deploy validated code + config-vps.yaml
+- [ ] ufw + cloud security group for TCP 14430
+- [ ] Real-WAN handshake, curl ifconfig.me, 2 clients, dashboard
+- [ ] Append real-WAN numbers to BENCHMARKS.md
