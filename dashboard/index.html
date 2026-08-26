@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PQ-VPN Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --good: #34d399; --warn: #fbbf24; --bad: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; padding: 20px; }
+  header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 20px; }
+  .pill { padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; background: var(--panel); border: 1px solid var(--border); }
+  .pill.ok { color: var(--good); } .pill.mid { color: var(--warn); } .pill.down { color: var(--bad); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .panel h2 { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv dt { color: var(--muted); } .kv dd { text-align: right; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font-size: 12px; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  #log { list-style: none; max-height: 200px; overflow-y: auto; font-size: 12px; font-family: ui-monospace, monospace; }
+  #log li { padding: 2px 0; border-bottom: 1px dashed var(--border); color: var(--muted); }
+  .chart-wrap { position: relative; height: 220px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡 PQ-VPN Dashboard</h1>
+  <span class="pill" id="server-pill">server —</span>
+  <span class="pill" id="client-pill">client —</span>
+  <span class="muted" id="updated"></span>
+</header>
+
+<div class="grid">
+  <section class="panel">
+    <h2>Server</h2>
+    <dl class="kv" id="server-kv"></dl>
+  </section>
+
+  <section class="panel">
+    <h2>Client</h2>
+    <dl class="kv" id="client-kv"></dl>
+  </section>
+
+  <section class="panel">
+    <h2>Active Tunnels</h2>
+    <table>
+      <thead><tr><th>#</th><th>IP</th><th>Port</th><th>Idle</th><th class="num">In</th><th class="num">Out</th><th></th></tr></thead>
+      <tbody id="tunnels"></tbody>
+    </table>
+    <p class="muted" id="tunnels-empty">no clients connected</p>
+  </section>
+
+  <section class="panel">
+    <h2>Throughput (kB/s)</h2>
+    <div class="chart-wrap"><canvas id="throughput-chart"></canvas></div>
+  </section>
+
+  <section class="panel">
+    <h2>Handshake Mode</h2>
+    <div class="chart-wrap"><canvas id="handshake-chart"></canvas></div>
+    <p class="muted" id="resume-note"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Event Log</h2>
+    <ul id="log"></ul>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const MB = 1024 * 1024;
+const KB = 1024;
+const fmt = n => {
+  if (n >= MB) return (n / MB).toFixed(2) + ' MB';
+  if (n >= KB) return (n / KB).toFixed(1) + ' kB';
+  return n + ' B';
+};
+const fmtRate = bps => {
+  const k = bps / KB;
+  if (k >= 1000) return (k / 1024).toFixed(2) + ' MB/s';
+  return k.toFixed(1) + ' kB/s';
+};
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let prev = null;
+let speedHistory = { in: [], out: [] };
+const MAX_POINTS = 60;
+const log = $('log');
+function pushLog(msg) {
+  const li = document.createElement('li');
+  const t = new Date().toLocaleTimeString();
+  li.textContent = `${t}  ${msg}`;
+  log.prepend(li);
+  while (log.children.length > 80) log.removeChild(log.lastChild);
+}
+
+function pill(el, state, label) {
+  el.textContent = label;
+  el.className = 'pill ' + (state === 'connected' || state === 'ok' ? 'ok' : state === 'reconnecting' || state === 'handshake-in-progress' ? 'mid' : 'down');
+}
+
+function renderKv(el, s) {
+  if (!s) { el.innerHTML = '<dt class="muted">—</dt><dd class="muted">not running</dd>'; return; }
+  const rows = [
+    ['State', s.state],
+    ['Mode', s.mode],
+    ['Groups', s.groups],
+    ['TUN', `${s.tun_name} ${s.tun_addr}`],
+    ['Session', s.resumed ? 'resumed (ticket)' : 'full'],
+    ['Uptime', s.uptime_seconds + 's'],
+  ];
+  el.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
+}
+
+function renderTunnels(clients) {
+  const tbody = $('tunnels');
+  $('tunnels-empty').style.display = (clients && clients.length) ? 'none' : '';
+  tbody.innerHTML = (clients || []).map(c => `
+    <tr>
+      <td>#${c.id}</td>
+      <td>${c.ip}</td>
+      <td>${c.port}</td>
+      <td>${c.idle_seconds}s</td>
+      <td class="num">${fmt(c.bytes_in)}</td>
+      <td class="num">${fmt(c.bytes_out)}</td>
+      <td><button class="btn" onclick="kick(${c.id})">kick</button></td>
+    </tr>`).join('');
+}
+
+function kick(id) {
+  fetch('/disconnect/' + id, { method: 'POST' })
+    .then(r => r.json())
+    .then(res => pushLog(`kick #${id}: ${res.ok ? 'sent' : (res.error || 'failed')}`))
+    .catch(e => pushLog(`kick #${id}: ${e}`));
+}
+
+const speedChart = new Chart($('throughput-chart'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    { label: 'client → server', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3, pointRadius: 0 },
+    { label: 'server → client', data: [], borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3, pointRadius: 0 },
+  ]},
+  options: { animation: false, responsive: true, maintainAspectRatio: false,
+    scales: { y: { beginAtZero: true, grid: { color: '#334155' } }, x: { grid: { color: 'transparent' } } },
+    plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12 } } } }
+});
+
+const hsChart = new Chart($('handshake-chart'), {
+  type: 'bar',
+  data: { labels: ['Classical', 'PQC'], datasets: [{ label: 'Session', data: [0, 0], backgroundColor: ['#4c72b0', '#dd8452'] }] },
+  options: { animation: false, responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true, title: { display: true, text: 'state', color: '#94a3b8' }, grid: { color: '#334155' } }, x: { grid: { color: 'transparent' } } } }
+});
+
+function updateSpeed(client) {
+  const now = Date.now();
+  if (prev && client) {
+    const dt = Math.max((now - prev.t) / 1000, 0.01);
+    speedHistory.in.push((client.bytes_out - prev.out) / dt / KB);
+    speedHistory.out.push((client.bytes_in - prev.in) / dt / KB);
+  } else {
+    speedHistory.in.push(0); speedHistory.out.push(0);
+  }
+  if (speedHistory.in.length > MAX_POINTS) { speedHistory.in.shift(); speedHistory.out.shift(); }
+  speedChart.data.labels.push(new Date().toLocaleTimeString());
+  if (speedChart.data.labels.length > MAX_POINTS) speedChart.data.labels.shift();
+  speedChart.data.datasets[0].data = speedHistory.in.slice();
+  speedChart.data.datasets[1].data = speedHistory.out.slice();
+  speedChart.update('none');
+  prev = client ? { t: now, in: client.bytes_in, out: client.bytes_out } : null;
+}
+
+function render(s) {
+  const server = s.server, client = s.client;
+  pill($('server-pill'), server ? server.state : 'down', 'server · ' + (server ? server.state : 'offline'));
+  pill($('client-pill'), client ? client.state : 'down', 'client · ' + (client ? client.state : 'offline'));
+  renderKv($('server-kv'), server);
+  renderKv($('client-kv'), client);
+  renderTunnels(server && server.clients);
+  updateSpeed(client);
+  const mode = client ? client.mode : (server ? server.mode : 'classical');
+  const idx = mode === 'pqc' ? 1 : 0;
+  hsChart.data.datasets[0].data = [0, 0];
+  hsChart.data.datasets[0].data[idx] = 1;
+  hsChart.data.labels = ['Classical', 'PQC'];
+  hsChart.update('none');
+  $('resume-note').textContent = client ? (client.resumed ? '✓ handshake resumed from ticket cache' : 'full handshake (no ticket)') : '';
+  $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+function firstPaint(s) {
+  if (!s.client || !s.server) return;
+  const labels = ['server', 'client'];
+  pushLog('dashboard connected — server ' + (s.server.state) + ', client ' + (s.client.state));
+  prev = { t: Date.now(), in: s.client.bytes_in, out: s.client.bytes_out };
+}
+
+let connected = false;
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/status`);
+  ws.onmessage = e => {
+    const s = JSON.parse(e.data);
+    if (!connected) { firstPaint(s); connected = true; }
+    render(s);
+  };
+  ws.onclose = () => {
+    connected = false;
+    pushLog('dashboard connection lost, reconnecting…');
+    setTimeout(connect, 1000);
+  };
+}
+connect();
+</script>
+</body>
+</html>
