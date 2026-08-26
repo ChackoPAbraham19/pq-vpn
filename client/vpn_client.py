@@ -87,7 +87,14 @@ def drain_stderr(stream, stop, status=None, ticket_offered=False):
                 elif text.strip() == 'Verification: OK':
                     # Handshake finished; now we know whether the exchange
                     # was genuinely skipped.
-                    status.set_resumed(bool(ticket_offered and not saw_cert_exchange))
+                    resumed = bool(ticket_offered and not saw_cert_exchange)
+                    status.set_resumed(resumed)
+                    if ticket_offered:
+                        if resumed:
+                            print('[client] session RESUMED (ticket accepted)')
+                        else:
+                            print('[client] full handshake (ticket not accepted — '
+                                  'fresh s_server has new ticket keys)')
             sys.stderr.write(text)
             sys.stderr.flush()
         except (ValueError, OSError):
@@ -211,7 +218,9 @@ def run_session(config, args, stop, status):
             sess_in = load_ticket(config['server_host'])
             sess_out = save_ticket_file(config['server_host'])
             if sess_in:
-                print(f'[client] resuming session from cache: {sess_in}')
+                # Intent, not outcome: whether the ticket is ACCEPTED is
+                # reported by drain_stderr at Verification: OK.
+                print(f'[client] offering cached ticket for resumption: {sess_in}')
         tls_proc = None
         for attempt in range(MAX_RETRIES):
             tls_proc = start_tls_client(

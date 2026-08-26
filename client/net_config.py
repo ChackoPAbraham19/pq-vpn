@@ -16,6 +16,36 @@ import sys
 RESOLV_CONF = '/etc/resolv.conf'
 _RESOLV_BACKUP = '/tmp/pqvpn.client.resolv.conf.bak'
 
+# Per-process DNS outcome memos: a dead path is probed at most ONCE, then
+# remembered silently. Ordering that callers must respect:
+#   1. PQVPN_SKIP_DNS env   2. resolved liveness   3. file fallback (memoized)
+_dns_skip_logged = False
+_resolved_liveness: bool | None = None
+_resolv_conf_dead = False
+
+
+def _dns_skip_requested() -> bool:
+    return os.environ.get('PQVPN_SKIP_DNS', '').strip().lower() in ('1', 'true', 'yes')
+
+
+def _resolved_active() -> bool:
+    """True only if resolvectl exists AND systemd-resolved is actually running.
+
+    Memoized per process — netns harnesses never have the unit, and re-probing
+    on every reconnect is pure waste.
+    """
+    global _resolved_liveness
+    if _resolved_liveness is None:
+        try:
+            live = subprocess.run(
+                ['systemctl', 'is-active', '--quiet', 'systemd-resolved'],
+                capture_output=True,
+            ).returncode == 0
+        except FileNotFoundError:
+            live = False
+        _resolved_liveness = bool(live and shutil.which('resolvectl'))
+    return _resolved_liveness
+
 
 def _run(cmd, dry_run=False, check=False):
     if dry_run:
@@ -98,16 +128,37 @@ def apply_tunnel_net(config: dict, dry_run=False) -> dict:
               'metric', str(metric)], dry_run=dry_run, check=True)
         applied['route'] = True
 
-    if _has_resolvectl() and not dry_run:
-        try:
-            _run(['resolvectl', 'dns', tun_name] + dns_servers, dry_run=dry_run, check=True)
-            _run(['resolvectl', 'domain', tun_name, '~.'], dry_run=dry_run, check=True)
-            applied['dns_method'] = 'resolvectl'
-        except subprocess.CalledProcessError:
-            applied['dns_method'] = _set_resolv_conf(dns_servers, dry_run=dry_run)
-    else:
-        applied['dns_method'] = _set_resolv_conf(dns_servers, dry_run=dry_run)
+    # --- DNS, in strict precedence order: env skip -> resolved liveness ->
+    # file fallback (memoized). Each dead path is probed once per process,
+    # then remembered silently.
+    global _dns_skip_logged
+    if _dns_skip_requested():
+        applied['dns_method'] = None
+        if not _dns_skip_logged:
+            print('[net_config] DNS management disabled (PQVPN_SKIP_DNS)')
+            _dns_skip_logged = True
+        return applied
 
+    if dry_run:
+        # Preview both paths without spawning anything.
+        print(f'[net_config] would set DNS via '
+              f'{"resolvectl" if _has_resolvectl() else "resolv.conf"}: {", ".join(dns_servers)}')
+        applied['dns_method'] = 'resolvectl' if _has_resolvectl() else 'resolv.conf'
+        return applied
+
+    if _resolved_active():
+        try:
+            _run(['resolvectl', 'dns', tun_name] + dns_servers, check=True)
+            _run(['resolvectl', 'domain', tun_name, '~.'], check=True)
+            applied['dns_method'] = 'resolvectl'
+            return applied
+        except subprocess.CalledProcessError:
+            pass  # fall through to the file fallback
+    elif _resolved_liveness is False and not _dns_skip_logged:
+        # Liveness already probed and failed: one clean line, no attempt.
+        print('[net_config] systemd-resolved not active; using resolv.conf fallback')
+
+    applied['dns_method'] = _set_resolv_conf(dns_servers)
     return applied
 
 
@@ -122,12 +173,16 @@ def _set_resolv_conf(dns_servers, dry_run=False) -> str | None:
         print('[net_config] would write nameservers to /etc/resolv.conf '
               f'({", ".join(dns_servers)})')
         return 'resolv.conf'
+    global _resolv_conf_dead
+    if _resolv_conf_dead:
+        return None  # already failed once this process; stay silent
     if not os.path.exists(RESOLV_CONF):
         return None
     if not os.path.exists(_RESOLV_BACKUP):
         try:
             shutil.copy2(RESOLV_CONF, _RESOLV_BACKUP)
         except OSError as e:
+            _resolv_conf_dead = True
             print(f'[net_config] resolv.conf backup failed, DNS left untouched ({e})',
                   file=sys.stderr)
             return None
@@ -139,6 +194,7 @@ def _set_resolv_conf(dns_servers, dry_run=False) -> str | None:
         os.replace(tmp, RESOLV_CONF)
         return 'resolv.conf'
     except OSError as e:
+        _resolv_conf_dead = True  # one clean line per process, ever
         print(f'[net_config] DNS not applied (resolv.conf write blocked: {e}); '
               'tunnel still usable by IP', file=sys.stderr)
         try:

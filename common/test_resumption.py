@@ -159,8 +159,15 @@ def test_resumption_flags_wired_in_client(tmp):
     # to a full handshake — the old code reported that as 'resumed'.
     wired = ('ticket_offered' in src
              and "args=(tls_proc.stderr, stop, status, sess_in is not None)" in src
-             and 'set_resumed(bool(ticket_offered and not saw_cert_exchange))' in src)
+             and 'resumed = bool(ticket_offered and not saw_cert_exchange)' in src
+             and 'status.set_resumed(resumed)' in src)
     test('resumed flag set on evidence, not intent', wired)
+    test('offer message states intent, not outcome',
+         'offering cached ticket for resumption' in src
+         and 'resuming session from cache' not in src)
+    test('outcome logged at Verification checkpoint',
+         'session RESUMED (ticket accepted)' in src
+         and 'full handshake (ticket not accepted' in src)
     test('old assumed-resumed line removed',
          'status.resumed = sess_in is not None' not in src)
 

@@ -147,6 +147,11 @@ trap cleanup EXIT SIGINT SIGTERM
 plan
 cd "$PDIR"
 
+# netns harness has no systemd-resolved and a write-blocked /etc/resolv.conf;
+# probing DNS on every client is guaranteed noise. VPS/production runs leave
+# this unset and keep full DNS management.
+export PQVPN_SKIP_DNS=1
+
 PING_FAILS=0
 
 log "Step 1/5: building netns harness"

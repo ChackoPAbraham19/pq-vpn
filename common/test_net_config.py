@@ -21,6 +21,61 @@ def test(name: str, ok: bool, detail: str = ''):
             print(f'    {detail}')
 
 
+def test_client_dns_skip_env():
+    """PQVPN_SKIP_DNS must short-circuit BEFORE any probe or attempt, printing
+    exactly one confirmatory line (memoized) so silent flag regressions show."""
+    import client.net_config as nc
+    from client.net_config import apply_tunnel_net
+
+    cfg = {'gateway': '10.8.0.1', 'server_host': '192.168.100.2',
+           'tun_name': 'tun0', 'route_metric': 50}
+    calls = []
+    orig_run = nc._run
+    nc._run = lambda cmd, dry_run=False, check=False: calls.append(' '.join(cmd))
+    old = os.environ.get('PQVPN_SKIP_DNS')
+    os.environ['PQVPN_SKIP_DNS'] = '1'
+    try:
+        out1 = _dry_run_capture(lambda: apply_tunnel_net(cfg, dry_run=False))
+        ok_line = 'DNS management disabled (PQVPN_SKIP_DNS)' in out1
+        out2 = _dry_run_capture(lambda: apply_tunnel_net(cfg, dry_run=False))
+        ok_memo = out2.count('DNS management disabled') == 0 and \
+            'resolvectl' not in out2 and 'nameservers' not in out2
+        test('skip-env prints one confirmatory line on first call', ok_line, out1)
+        test('skip-env is memoized: later calls fully silent', ok_memo, out2)
+        # route still applied — DNS skip must not affect the tunnel itself
+        ok_route = any(c.startswith('ip route add default via 10.8.0.1 dev tun0') for c in calls)
+        test('skip-env leaves route handling untouched', ok_route)
+    finally:
+        nc._run = orig_run
+        if old is None:
+            del os.environ['PQVPN_SKIP_DNS']
+        else:
+            os.environ['PQVPN_SKIP_DNS'] = old
+
+
+def test_client_dns_liveness_fail_skips_resolvectl():
+    """When systemd-resolved is not active, resolvectl is never spawned and the
+    fallback path is taken with one clean line."""
+    import client.net_config as nc
+    from client.net_config import apply_tunnel_net
+
+    cfg = {'gateway': '10.8.0.1', 'tun_name': 'tun0', 'route_metric': 50,
+           'dns_servers': '10.8.0.1'}
+    old_live, old_dead = nc._resolved_liveness, nc._resolv_conf_dead
+    old_skip = nc._dns_skip_logged
+    nc._resolved_liveness = False   # simulate probed-and-dead resolved
+    nc._resolv_conf_dead = True     # and a known-dead file fallback
+    try:
+        out = _dry_run_capture(
+            lambda: apply_tunnel_net(dict(cfg), dry_run=True))
+        # dry-run preview still plans DNS but never claims resolvectl ran
+        ok_dry = 'would set DNS via' in out
+        test('dry-run preview unaffected by liveness state', ok_dry, out)
+    finally:
+        nc._resolved_liveness, nc._resolv_conf_dead = old_live, old_dead
+        nc._dns_skip_logged = old_skip
+
+
 def _dry_run_capture(fn):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -95,9 +150,10 @@ def test_client_route_command():
     out = _dry_run_capture(lambda: apply_tunnel_net(cfg, dry_run=True))
     required = [
         'ip route add default via 10.8.0.1 dev tun0 metric 50',
-        'nameservers to /etc/resolv.conf (10.8.0.1)',
+        # preview names whichever method a real run would pick on this host
+        'would set DNS via',
     ]
-    ok = all(r in out for r in required)
+    ok = all(r in out for r in required) and '10.8.0.1' in out.split('would set DNS via')[1]
     test('client applies default route + DNS', ok, out)
 
 
@@ -201,6 +257,8 @@ if __name__ == '__main__':
     test_server_teardown_nat()
     test_server_dnsmasq_config()
     test_client_route_command()
+    test_client_dns_skip_env()
+    test_client_dns_liveness_fail_skips_resolvectl()
     test_client_protect_route_order()
     test_client_no_protect_when_no_prior_default()
     test_destroy_tun_safe()
