@@ -141,6 +141,12 @@ Both PKI trees use a 3-certificate chain (CA → server, CA → client). All cer
 | Client cert | Custom 3.4.7 | ML-DSA-65 | NIST Level 3 |
 | TLS handshake | Custom 3.4.7 | X25519MLKEM768 | NIST Level 3 |
 
+Cert algorithms verified empirically (`openssl x509 -text`): CA, server, and
+client certs are all `mldsa65` (OID 2.16.840.1.101.3.4.3.18), and the TLS 1.3
+CertificateVerify therefore also uses `mldsa65` — the scheme must match the
+cert key type, so the live `Signature type: mldsa65` in s_client brief output
+is genuine post-quantum authentication, not a negotiation artifact.
+
 ## Network Namespace Test Harness
 
 Testing entirely within a single Linux machine:

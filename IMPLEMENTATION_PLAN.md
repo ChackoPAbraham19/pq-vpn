@@ -228,7 +228,7 @@ Expected outcomes: PQC handshake 2–10x slower (larger certs + key shares), thr
 |---|---|
 | OS | Ubuntu 24.04 |
 | PQC library | liboqs |
-| TLS integration | oqs-provider on OpenSSL 3.0.13 |
+| TLS integration | oqs-provider on custom OpenSSL 3.4.7 (`/opt/openssl-pqc`) — system 3.0.13 / Python `ssl` cannot load ML-DSA certs |
 | PQC KEM | ML-KEM-768 (Kyber768), hybrid `X25519MLKEM768` |
 | PQC signatures | ML-DSA-65 (Dilithium3) |
 | Tunnel daemon | Python 3.12 with `openssl s_server/s_client` subprocess |
