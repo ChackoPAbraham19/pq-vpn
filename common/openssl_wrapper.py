@@ -61,6 +61,8 @@ def start_tls_client(
     mode: str = 'classical',
     groups: str = 'X25519MLKEM768',
     config_dir: str | None = None,
+    sess_in: str | None = None,
+    sess_out: str | None = None,
 ) -> subprocess.Popen:
     cmd = ['openssl', 's_client']
     if mode == 'pqc':
@@ -72,9 +74,14 @@ def start_tls_client(
         '-CAfile', ca_path,
         '-verify', '1',
         '-quiet',
+        '-brief',
     ])
     if mode == 'pqc':
         cmd.extend(['-groups', groups])
+    if sess_in:
+        cmd.extend(['-sess_in', sess_in])
+    if sess_out:
+        cmd.extend(['-sess_out', sess_out])
 
     return subprocess.Popen(
         cmd,
@@ -83,3 +90,27 @@ def start_tls_client(
         stderr=subprocess.PIPE,
         env=_make_env(mode, config_dir),
     )
+
+
+# Lines from `s_client -brief` stderr worth surfacing in status. Values are
+# observed negotiation results, not config echoes.
+_BRIEF_KEYS = {
+    'Protocol version': 'protocol',
+    'Ciphersuite': 'cipher',
+    'Signature type': 'sig_type',
+    'Server Temp Key': 'kex',
+}
+
+
+def parse_brief_line(line: str) -> tuple[str, str] | None:
+    """Map one `s_client -brief` stderr line to a (key, value) status pair.
+
+    Returns None for lines carrying no negotiation info.
+    """
+    line = line.strip()
+    for prefix, key in _BRIEF_KEYS.items():
+        if line.startswith(prefix + ':'):
+            value = line[len(prefix) + 1:].strip()
+            if value:
+                return key, value
+    return None

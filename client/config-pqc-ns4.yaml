@@ -1,0 +1,13 @@
+mode: pqc
+server_host: 192.168.100.2
+server_port: 14430
+tun_name: tun0
+tun_mtu: 1400
+route_metric: 50
+cert_dir: pki/certs/pqc
+groups: X25519MLKEM768
+keepalive_interval: 15
+backoff_min: 1.0
+backoff_max: 30.0
+resume_cache: true
+instance: ns4

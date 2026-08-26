@@ -3,6 +3,15 @@ host: 0.0.0.0
 port: 14430
 tun_name: tun0
 tun_addr: 10.8.0.1/24
+tun_net: 10.8.0.0/24
+gateway: 10.8.0.1
+dns: 10.8.0.1
 tun_mtu: 1400
 cert_dir: pki/certs/pqc
 groups: X25519MLKEM768
+nat: true
+outbound_iface: veth-ns1
+persist_sysctl: false
+dnsmasq: true
+dns_upstream: 1.1.1.1
+keepalive_interval: 15

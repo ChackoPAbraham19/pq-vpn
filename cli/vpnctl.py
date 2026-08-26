@@ -12,7 +12,8 @@ import click
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
-from common.daemon_utils import socket_path, pid_path, read_pid_file
+from common.daemon_utils import (socket_path, pid_path, read_pid_file,
+                                 discover_sockets, instance_label)
 
 
 def _detect_mode(config_path) -> str:
@@ -22,30 +23,40 @@ def _detect_mode(config_path) -> str:
     return 'client' if 'server_host' in cfg else 'server'
 
 
+def _detect_instance(config_path) -> str | None:
+    import yaml
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+    return cfg.get('instance')
+
+
 def _daemon_script(mode: str) -> str:
     return os.path.join(PROJECT_DIR, mode, f'vpn_{mode}.py')
 
 
-def _check_running(role: str) -> int | None:
-    pid = read_pid_file(role)
+def _check_running(role: str, instance: str | None = None) -> int | None:
+    pid = read_pid_file(role, instance)
     if pid and os.path.exists(f'/proc/{pid}'):
         return pid
     if pid:
         try:
-            os.unlink(pid_path(role))
+            os.unlink(pid_path(role, instance))
         except FileNotFoundError:
             pass
     return None
 
 
 def _spawn_daemon(mode: str, config_path: str):
-    sp = socket_path(mode)
+    instance = _detect_instance(config_path)
+    sp = socket_path(mode, instance)
     if os.path.exists(sp):
-        click.echo(f'Error: {mode} already running ({sp} exists).', err=True)
+        label = f'{mode}[{instance}]' if instance else mode
+        click.echo(f'Error: {label} already running ({sp} exists).', err=True)
         sys.exit(1)
-    running_pid = _check_running(mode)
+    running_pid = _check_running(mode, instance)
     if running_pid:
-        click.echo(f'Error: {mode} already running (pid={running_pid}).', err=True)
+        label = f'{mode}[{instance}]' if instance else mode
+        click.echo(f'Error: {label} already running (pid={running_pid}).', err=True)
         sys.exit(1)
 
     script = _daemon_script(mode)
@@ -81,8 +92,7 @@ def _spawn_daemon(mode: str, config_path: str):
     click.echo(f'{mode.capitalize()} daemon started (pid={proc.pid})')
 
 
-def _read_status(role: str) -> dict | None:
-    sp = socket_path(role)
+def _read_status_sock(sp: str) -> dict | None:
     if not os.path.exists(sp):
         return None
     try:
@@ -96,10 +106,14 @@ def _read_status(role: str) -> dict | None:
         return None
 
 
-def _kill_by_role(role: str):
-    pid = read_pid_file(role)
+def _read_status(role: str, instance: str | None = None) -> dict | None:
+    return _read_status_sock(socket_path(role, instance))
+
+
+def _kill_by_role(role: str, instance: str | None = None):
+    pid = read_pid_file(role, instance)
     if not pid:
-        pid = _check_running(role)
+        pid = _check_running(role, instance)
     if not pid:
         return
 
@@ -118,7 +132,7 @@ def _kill_by_role(role: str):
         except ProcessLookupError:
             pass
 
-    for p in [socket_path(role), pid_path(role)]:
+    for p in [socket_path(role, instance), pid_path(role, instance)]:
         try:
             os.unlink(p)
         except FileNotFoundError:
@@ -171,43 +185,81 @@ def connect_client(config):
 
 @cli.command()
 def disconnect():
-    """Disconnect both server and client VPN daemons."""
+    """Disconnect the server and every client instance."""
     anything = False
     for role in ('server', 'client'):
-        pid = read_pid_file(role)
-        if pid or _check_running(role):
-            _kill_by_role(role)
-            click.echo(f'{role.capitalize()} stopped.')
-            anything = True
+        pids = [(None, read_pid_file(role))]
+        if role == 'client':
+            # also every -instance suffixed pid file
+            for sp in discover_sockets(role):
+                inst = instance_label(sp)
+                if inst:
+                    pids.append((inst, read_pid_file(role, inst)))
+        seen = set()
+        for inst, _ in pids:
+            key = (role, inst)
+            if key in seen:
+                continue
+            seen.add(key)
+            if read_pid_file(role, inst) or _check_running(role, inst):
+                _kill_by_role(role, inst)
+                label = f'{role}[{inst}]' if inst else role
+                click.echo(f'{label.capitalize()} stopped.')
+                anything = True
     if not anything:
         click.echo('VPN is not running.')
 
 
+def _print_status(label: str, s: dict):
+    width = max(len(k) for k in s.keys()) + 2
+    click.echo(f'{label}:')
+    click.echo(f'  {"Mode":<{width}}{s.get("mode", "?")}')
+    click.echo(f'  {"State":<{width}}{s.get("state", "?")}')
+    neg = s.get('negotiated') or {}
+    if neg:
+        parts = [f'{k}={v}' for k, v in sorted(neg.items())]
+        extra = ' (resumed)' if s.get('resumed') else ''
+        click.echo(f'  {"Negotiated":<{width}}{" · ".join(parts)}{extra}')
+    elif s.get('resumed'):
+        click.echo(f'  {"Session":<{width}}resumed (ticket cache hit)')
+    click.echo(f'  {"TUN":<{width}}{s.get("tun_name", "?")} — {s.get("tun_addr", "?")}')
+    click.echo(f'  {"Groups":<{width}}{s.get("groups", "?")}')
+    click.echo(f'  {"Uptime":<{width}}{s.get("uptime_seconds", 0)}s')
+    click.echo(f'  {"Bytes in":<{width}}{_fmt_bytes(s.get("bytes_in", 0))}')
+    click.echo(f'  {"Bytes out":<{width}}{_fmt_bytes(s.get("bytes_out", 0))}')
+    clients = s.get('clients') or []
+    if clients:
+        click.echo(f'  {"Clients":<{width}}')
+        for c in clients:
+            click.echo(
+                f'    # {c.get("id")}  {c.get("ip")}  '
+                f'port {c.get("port")}  in {_fmt_bytes(c.get("bytes_in", 0))}  '
+                f'out {_fmt_bytes(c.get("bytes_out", 0))}'
+            )
+    click.echo()
+
+
 @cli.command()
 def status():
-    """Show VPN connection status for server and client."""
+    """Show VPN connection status for the server and every client instance."""
     server = _read_status('server')
-    client = _read_status('client')
+    client_socks = discover_sockets('client')
 
-    if not server and not client:
+    if not server and not client_socks:
         click.echo('VPN is not running.')
         return
 
-    width = max(len(k) for k in (server or client or {}).keys()) + 2
+    if server:
+        _print_status('Server', server)
 
-    for role, s in [('Server', server), ('Client', client)]:
+    for sp in client_socks:
+        inst = instance_label(sp)
+        label = f'Client[{inst}]' if inst else 'Client'
+        s = _read_status_sock(sp)
         if not s:
-            click.echo(f'{role}: not running')
+            click.echo(f'{label}: not running')
             continue
-        click.echo(f'{role}:')
-        click.echo(f'  {"Mode":<{width}}{s.get("mode", "?")}')
-        click.echo(f'  {"State":<{width}}{s.get("state", "?")}')
-        click.echo(f'  {"TUN":<{width}}{s.get("tun_name", "?")} — {s.get("tun_addr", "?")}')
-        click.echo(f'  {"Groups":<{width}}{s.get("groups", "?")}')
-        click.echo(f'  {"Uptime":<{width}}{s.get("uptime_seconds", 0)}s')
-        click.echo(f'  {"Bytes in":<{width}}{_fmt_bytes(s.get("bytes_in", 0))}')
-        click.echo(f'  {"Bytes out":<{width}}{_fmt_bytes(s.get("bytes_out", 0))}')
-        click.echo()
+        _print_status(label, s)
 
 
 if __name__ == '__main__':
