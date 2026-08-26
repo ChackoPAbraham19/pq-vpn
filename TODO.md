@@ -96,46 +96,76 @@
 ## Phase 0b: Clean-build validation [pending]
 - [ ] Validate `install_custom_openssl.sh` on fresh Ubuntu 24.04 VM/container
 - [ ] Verify oqs-provider lists ML-KEM / ML-DSA
-- [ ] Write `docs/DEPLOYMENT.md` skeleton (ufw + security-group checklist)
+- [x] `docs/DEPLOYMENT.md` skeleton (build steps + ufw/security-group checklist) — written in Phase 6
 
-## Phase 1: Default route, NAT, DNS [pending]
-- [ ] Add frame-type control byte to `common/framing.py` (+ tests)
-- [ ] Server: persist ip_forward, MASQUERADE -o eth0, FORWARD accept, dnsmasq
-- [ ] Client: push default route metric 50; restore route + DNS on teardown
-- [ ] Control frame pushes client IP / gateway / DNS
-- [ ] Verify `curl ifconfig.me` = server IP; DNS via tunnel; UDP `-b 0` true ceiling
+## Phase 1: Default route, NAT, DNS [in progress]
+- [x] Add frame-type control byte to `common/framing.py` (+ tests)
+- [x] Control frame pushes client IP / gateway / DNS (welcome config-push, Phase 4-pre)
+- [x] `server/net_config.py`: setup/teardown NAT + FORWARD + ip_forward (idempotent, `--dry-run`)
+- [x] `server/net_config.py`: dnsmasq on tun0 bound to gateway, upstream from config
+- [x] `client/net_config.py`: default route via gw metric 50 + DNS (resolvectl → resolv.conf fallback), tracked restore
+- [x] Daemons wired: `setup_nat`/`start_dnsmasq` on server start, teardown on stop; client apply/restore around relay
+- [x] `common/test_net_config.py` 8/8 dry-run command assertions pass
+- [x] netns run (2026-08-26, live): NAT MASQUERADE + dnsmasq bound on 10.8.0.1; default-route push + /32 transport protection + restore verified across 3 namespaces. DNS client application blocked by harness env (no systemd-resolved in netns; resolv.conf EPERM) — documented limitation, IP connectivity unaffected
 
-## Phase 4-pre: `openssl_wrapper` -fd support [pending]
-- [ ] `start_tls_server()` accepts pre-connected `socket_fd` (`s_server -fd`)
-- [ ] Unit test classical + PQC handshake through -fd path
+## Phase 4-pre: per-client ports (replaces -fd; neither OpenSSL has `s_server -fd`) [completed]
+- [x] Pivot: welcome accept loop + config-push control frame (assigned IP / data port / gateway / dns)
+- [x] `common/framing.py`: `pack_config` / `unpack_config` control-frame helpers (+tests)
+- [x] Test: welcome handshake -> assigned port -> framed TLS relay end-to-end
 
-## Phase 4: Multi-client [pending]
-- [ ] `server/session_manager.py`: ClientSession, IP pool (10.8.0.2-4), TUN demux
-- [ ] `server/vpn_server.py`: Python accept loop → per-client `s_server -fd`
-- [ ] status includes client table
-- [ ] `scripts/setup_routing.sh` adds vpn_ns3/ns4 client namespaces
-- [ ] Verify 2 concurrent clients + traffic isolation + iperf3 degradation curve
+## Phase 4: Multi-client [in progress]
+- [x] `server/session_manager.py`: ClientSession, IP pool (10.8.0.2-4, 3 max), TUN demux
+- [x] `server/vpn_server.py`: welcome accept loop -> per-client `s_server -accept <port>`
+- [x] `client/vpn_client.py`: welcome handshake, assigned IP/port, TUN at pushed address
+- [x] `common/daemon_utils.py`: status client table (+ `vpnctl status` shows it)
+- [x] `scripts/setup_routing.sh` multi-client namespaces (vpn_ns2..ns4)
+- [x] 10/10 tests pass incl. welcome->relay end-to-end + 2 concurrent relays
+- [x] netns run (2026-08-26, live): 3 concurrent clients on 10.8.0.2-.4 / ports 14431-33; isolated tunnels verified via per-client pings + concurrent iperf3 (491/926/1014 Mbps)
 
-## Phase 2: Keepalive + reconnect [pending]
-- [ ] 15s keepalive control frame; server idle teardown 3×15s
-- [ ] Client reconnect supervisor with exponential backoff (1-30s)
-- [ ] Status states: handshake-in-progress / connected / reconnecting
-- [ ] Verify auto-recovery after network drop
+## Phase 2: Keepalive + reconnect [in progress]
+- [x] 15s keepalive control frame; server idle teardown 3×15s
+- [x] Client reconnect supervisor with exponential backoff (1-30s)
+- [x] Status states: handshake-in-progress / connected / reconnecting
+- [x] `common/test_keepalive.py` 5/5: backoff, idle detection, touch reset, keepalive-keeps-alive, pipe keepalive
+- [x] Integration: client keepalives → relay `session.touch()` → idle teardown fires only after silence
+- [x] Fix: `idle_monitor` skips already-stopping sessions (no repeated teardown logs)
+- [x] Fix: client main loop branches on `run_session` clean/fail (reconnect only on unexpected drop)
+- [x] Configs: `keepalive_interval`, `backoff_min`, `backoff_max` in server + all 4 client yamls
+- [x] Verify auto-recovery after network drop (netns run): reconnect supervisor observed live (backoff 1→30s across 3 clients); TUN lifecycle fix (`destroy_tun` + EBUSY retry) makes reconnects actually succeed; idle teardown fired at 45s for zombie sessions
 
-## Phase 3: Session resumption [pending]
-- [ ] Verify TLS tickets with oqs-provider PQC groups
-- [ ] Ticket cache to ~/.pqvpn/cache/<server>.tick
-- [ ] Full vs resumed handshake benchmark → chart
+## Phase 3: Session resumption [in progress]
+- [x] Verify TLS tickets with oqs-provider PQC groups (X25519MLKEM768) — `Reused, TLSv1.3` confirmed for both modes; resumed PQC handshake skips the KEM (ServerHello `00 29` pre_shared_key accepted, no Certificate/KeyExchange)
+- [x] `common/ticket_cache.py`: stable per-server path `~/.pqvpn/cache/<host>.<sha16>.tick`, `load_ticket`/`save_ticket_file`/`rotate_ticket` (atomic)/`clear_ticket`
+- [x] `common/openssl_wrapper.py`: `start_tls_client` accepts `sess_in`/`sess_out` (verified same-file read+write refresh works)
+- [x] `client/vpn_client.py`: `sess_in` from cache (resume) + `sess_out` to cache (persists across restarts); `resume_cache: true` config toggle; status `resumed` flag
+- [x] `common/daemon_utils.py`: status snapshot includes `resumed`; `vpnctl status` prints `Session: resumed`
+- [x] `benchmark/run_handshake_bench.py --resume`: primes a ticket once, then interleaves full+resumed trials per mode → `handshake_resume_{mode}.csv` (full/resumed/ms)
+- [x] `benchmark/plot_results.py`: `_plot_resume` → `handshake_resume.png`
+- [x] `common/test_resumption.py` 11/11: cache paths, atomic rotate, wrapper flags, real OpenSSL prime→`Reused` end-to-end, client wiring
+- [x] Full suite: 11/11 + 8/8 + 5/5 + 11/11 pass
+- [x] netns run (2026-08-26, live): tickets offered + cached across reconnects; `resumed` now evidence-based (fresh per-client `s_server` regenerates ticket keys → full-handshake fallback is the honest outcome; see architecture.md limitations). Benchmark-level prime→`Reused` verified separately.
 
-## Phase 5: Dashboard [pending]
-- [ ] `dashboard/dashboard_server.py` (FastAPI + WS)
-- [ ] `dashboard/index.html` (handshake/tunnels/throughput/log panels)
-- [ ] Verify ≤1s UI updates on connect/drop/reconnect
+## Phase 5: Dashboard [in progress]
+- [x] `dashboard/dashboard_server.py`: FastAPI — `/ws/status` WS stream, `GET /api/status`, `POST /disconnect/{id}`, `POST /rekey` (returns unsupported)
+- [x] `dashboard/index.html`: Chart.js panels (throughput line chart, handshake-mode bar, tunnels table with kick button, event log, server/client KV)
+- [x] Status source: polls `/tmp/pqvpn-{server,client}.sock` every 0.5s; state flip propagates to WS in ~300ms (≤1s goal)
+- [x] `common/daemon_utils.py`: `IpcServer` accepts optional commands (`command_handler`); `select`-based 100ms command wait keeps bare vpnctl polls fast; `ipc_request(role, command=)` helper
+- [x] `server/vpn_server.py`: IPC command handler — `disconnect` (SessionManager.disconnect), `clients`
+- [x] `server/session_manager.py`: `disconnect(client_id)` force-teardown (idempotent)
+- [x] `requirements.txt`: fastapi, uvicorn[standard], websockets (installed in venv)
+- [x] `dashboard/test_dashboard.py` 9/9: IPC envelope compat, FastAPI endpoints, WS stream, feed missing-socket safety, uvicorn live boot + serve
+- [x] Full suite: 11/11 + 8/8 + 5/5 + 11/11 + 9/9 pass
+- [x] Verified vpnctl `_read_status` still works with new envelope-compatible IPC
+- [ ] Live browser session: connect/drop/reconnect shows state + throughput + kick in real time
 
-## Phase 6: Report + demo prep [pending]
-- [ ] `docs/BENCHMARKS.md` (full/resumed, multi-client degradation, UDP ceiling)
-- [ ] Mermaid architecture diagram update
-- [ ] Demo script
+## Phase 6: Report + demo prep [completed]
+- [x] `docs/BENCHMARKS.md` — compiled all CSV results (full + resumed handshake, latency, throughput, file transfer), interpretation, Future Work, reproduction commands
+- [x] Mermaid architecture diagram updated (welcome loop, per-client relays, TUN demux, ticket cache, dashboard)
+- [x] `docs/DEPLOYMENT.md` — build steps + ufw/security-group checklist, VPS config sketch (Phase 7 ready)
+- [x] `scripts/demo.sh` — `--dry-run` (offline: unit suites + 5-trial handshake bench to tmp) and live netns path (`--mode`, `--clients 1-3`, `--keep`); dry-run verified end-to-end
+- [x] `benchmark/run_handshake_bench.py` gains `--out-dir` so dry-runs don't clobber committed 25-trial CSVs
+- [x] Added `client/config-pqc-ns3.yaml` / `config-pqc-ns4.yaml` (PQC multi-client demo configs)
+- [x] netns run (2026-08-26, live): `scripts/demo.sh --mode pqc --clients 3` full pass — 3 tunnels stable through pings (0% loss, ~1ms) + concurrent iperf3, clean teardown. Fixed en route: iptables arg order (tests had blessed it), server tun0 never addressed/up'd, tunnel-self-blackhole (missing /32 transport route), TUN EBUSY reconnect wedge, relay teardown on transient TUN-write errors
 
 ## Phase 7: Capstone — VPS deployment (payment, LAST) [pending]
 - [ ] Buy x86 VPS; deploy validated code + config-vps.yaml

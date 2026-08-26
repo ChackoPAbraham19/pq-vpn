@@ -25,6 +25,19 @@ def _read_handshake(path: str) -> dict:
     return data
 
 
+def _read_resume(path: str) -> dict:
+    data = defaultdict(list)
+    if not os.path.exists(path):
+        return data
+    with open(path) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row['ms'] == 'err':
+                continue
+            data[row['kind']].append(float(row['ms']))
+    return data
+
+
 def _read_latency(path: str) -> dict:
     data = {}
     if not os.path.exists(path):
@@ -84,6 +97,27 @@ def _plot_handshake(data: dict):
     plt.tight_layout()
     fig.savefig(os.path.join(OUT_DIR, 'handshake.png'), dpi=150)
     print(f'  handshake.png')
+
+
+def _plot_resume(data: dict):
+    if not data:
+        return
+    fig, ax = plt.subplots(figsize=(8, 5))
+    kinds = ['full', 'resumed']
+    kinds = [k for k in kinds if data.get(k)]
+    values = [np.median(data[k]) for k in kinds]
+    colors = ['#4c72b0', '#55a868']
+    bars = ax.bar(kinds, values, color=colors[:len(kinds)], width=0.5, edgecolor='black')
+    for bar, v in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+                f'{v:.1f}ms', ha='center', va='bottom')
+    ax.set_ylabel('Median Handshake Time (ms)')
+    ax.set_title('Session Resumption: Full vs Resumed Handshake')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUT_DIR, 'handshake_resume.png'), dpi=150)
+    print(f'  handshake_resume.png')
 
 
 def _plot_latency(data: dict):
@@ -186,8 +220,13 @@ def main():
     ft2 = _read_file_transfer(os.path.join(args.dir, 'file_transfer_pqc.csv'))
     ft.update(ft2)
 
+    rs = _read_resume(os.path.join(args.dir, 'handshake_resume_classical.csv'))
+    rs2 = _read_resume(os.path.join(args.dir, 'handshake_resume_pqc.csv'))
+    rs.update(rs2)
+
     print('Generating plots...')
     _plot_handshake(hs)
+    _plot_resume(rs)
     _plot_latency(lat)
     _plot_throughput(tp)
     _plot_file_transfer(ft)

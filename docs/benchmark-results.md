@@ -1,5 +1,9 @@
 # PQ-VPN Benchmark Results
 
+> **Superseded** by the canonical [`docs/BENCHMARKS.md`](BENCHMARKS.md), which adds
+> the full-vs-resumed session-resumption results and current CSV numbers. Kept for
+> the original 25-trial handshake / latency / throughput / file-transfer write-up.
+
 Test environment: Ubuntu 24.04, Linux 6.13 kernel, Python 3.12, OpenSSL 3.4.7-dev (custom) / 3.0.13 (system). Network: veth pair bridged via ip_forward on local host with TUN MTU 1400. All benchmarks run as `sudo ip netns exec vpn_ns2` inside isolated network namespace.
 
 ---

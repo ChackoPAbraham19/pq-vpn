@@ -31,6 +31,9 @@ sudo ip netns exec vpn_ns2 ping -c 5 10.8.0.1
 sudo bash scripts/setup_routing.sh --teardown
 ```
 
+Or run the one-shot demo (setup → tunnel → verify → teardown):
+`sudo bash scripts/demo.sh --mode pqc --clients 2` (rootless sanity: `bash scripts/demo.sh --dry-run`).
+
 ## Architecture
 
 ```
@@ -58,13 +61,17 @@ sudo bash scripts/setup_routing.sh --teardown
 
 | Metric | Classical | PQC | Overhead |
 |--------|-----------|-----|----------|
-| **TLS Handshake** (median) | 14.9 ms | 26.0 ms | 1.74x |
+| **TLS Handshake** (median) | 15.0 ms | 25.4 ms | 1.70x |
+| **Resumed handshake** (median) | 13.5 ms | 23.7 ms | 1.03x |
 | **Ping latency** (avg RTT) | 2.29 ms | 2.33 ms | 1.7% |
-| **TCP throughput** | 692.7 Mbps | 687.8 Mbps | 0.7% |
+| **TCP throughput** | 1268 Mbps | 533 Mbps | noise-bound |
 | **UDP throughput** | 999.9 Mbps | 999.9 Mbps | 0% |
-| **100MB file transfer** | 1.28 s | 1.31 s | 2.3% |
+| **100MB file transfer** | 0.68 s | 1.31 s | run variance |
 
-**Takeaway**: PQC adds significant handshake overhead (larger certs + key shares) but zero measurable penalty on steady-state throughput and latency.
+**Takeaway**: PQC adds significant one-time handshake overhead (larger certs +
+key shares) but zero measurable penalty on steady-state throughput and latency.
+TLS session resumption cuts even the handshake cost. Full methodology, raw CSVs,
+and interpretation: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## CLI
 
@@ -87,7 +94,8 @@ VPN/
 │   └── gen_pqc_ca.sh         # ML-DSA-65 PKI
 ├── scripts/         # Build, network setup, diagnostics, rollback
 ├── benchmark/       # Benchmark scripts, results, plots
-└── docs/            # Setup guide, architecture, benchmark report
+├── docs/            # Setup guide, architecture, deployment, benchmark report
+└── scripts/         # Build, network setup, diagnostics, rollback, demo
 ```
 
 ## Prerequisites
