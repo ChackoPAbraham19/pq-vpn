@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""session_manager.py — multi-client sessions for the PQ-VPN server.
+"""session_manager.py -- multi-client sessions for the PQ-VPN server.
 
 Each accepted welcome connection is assigned a client id, a tunnel IP, and a
 dedicated TLS data port. The server then runs one `openssl s_server` subprocess
@@ -110,14 +110,28 @@ class SessionManager:
         self._next_id = 1
 
     def welcome_payload(self) -> dict | None:
-        """Allocate a client slot. Returns config-push dict or None if full."""
+        """Allocate a client slot. Returns config-push dict or None if full.
+
+        On a full pool, idle sessions (>15s silent) are reclaimed in-place so a
+        reconnecting client isn't bounced for the full 45s idle teardown window.
+        """
+        host_id = None
         with self._lock:
-            if len(self.sessions) >= self.max_clients:
-                return None
-        try:
-            host_id = self.pool.alloc()
-        except RuntimeError:
-            return None
+            if len(self.sessions) < self.max_clients:
+                try:
+                    host_id = self.pool.alloc()
+                except RuntimeError:
+                    host_id = None
+        if host_id is None:
+            # Pool full (or alloc failed): try reclaiming idle slots, then retry.
+            self.reclaim_idle(15.0)
+            with self._lock:
+                if len(self.sessions) >= self.max_clients:
+                    return None
+                try:
+                    host_id = self.pool.alloc()
+                except RuntimeError:
+                    return None
         with self._lock:
             client_id = self._next_id
             self._next_id += 1
@@ -172,3 +186,28 @@ class SessionManager:
         """Sessions with no traffic/keepalive for >= timeout seconds."""
         with self._lock:
             return [s for s in self.sessions.values() if s.idle_seconds() >= timeout]
+
+    def reclaim_idle(self, idle_threshold: float) -> list[int]:
+        """Reclaim sessions idle for >= idle_threshold seconds.
+
+        Inline (no calls to locking helpers — self._lock is not reentrant).
+        Returns the list of reclaimed client_ids.
+        """
+        reclaimed = []
+        with self._lock:
+            idle = [s for s in self.sessions.values()
+                    if s.idle_seconds() >= idle_threshold]
+            for session in idle:
+                self.sessions.pop(session.client_id, None)
+                self.pool.release(session.host_id)
+                session.stop.set()
+                reclaimed.append(session.client_id)
+        # Terminate TLS subprocesses after releasing the lock (subprocess ops
+        # can be slow and must not hold the manager lock).
+        for session in idle:
+            if session.tls_proc is not None:
+                try:
+                    session.tls_proc.terminate()
+                except ProcessLookupError:
+                    pass
+        return reclaimed

@@ -47,6 +47,10 @@ cleanup() {
     CLEANUP_RAN=1
     echo ""
     echo "=== Cleaning up ==="
+    # Kill tunnel daemons FIRST: deleting a namespace only detaches its name —
+    # processes inside survive as ghosts, keep stale IPC sockets bound, and can
+    # later unlink socket paths that a NEW generation of daemons is using.
+    pkill -f "vpn_server.py|vpn_client.py" 2>/dev/null || true
     bash "${BACKUP_RESTORE}" restore 2>/dev/null || true
     for ns in "${NS_ALL[@]}"; do
         ip netns del "${ns}" 2>/dev/null || true
@@ -65,7 +69,7 @@ fi
 # Stale namespace check — refuse to run if leftovers exist
 if ip netns list | grep -qE "^vpn_ns[1-4](\s|$)"; then
     echo "ERROR: Stale namespaces detected. Run teardown first:"
-    echo "  sudo bash $(basename "$0") --teardown"
+    echo "  sudo bash scripts/$(basename "$0") --teardown"
     exit 1
 fi
 

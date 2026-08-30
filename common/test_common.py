@@ -530,6 +530,75 @@ def test_status_negotiated_lifecycle():
     test('note_negotiated thread-safe under contention', ok_threaded)
 
 
+def test_ipc_server_socket_permissions():
+    """IpcServer binds its Unix socket 0666 so non-root consumers can connect."""
+    import tempfile
+    import common.daemon_utils as du
+    from common.daemon_utils import IpcServer, StatusTracker
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        orig = du.socket_path
+        du.socket_path = lambda role, instance=None: os.path.join(
+            tmpdir, f'pqvpn-{role}' + (f'-{instance}' if instance else '') + '.sock')
+        ipc = None
+        try:
+            st = StatusTracker({'mode': 'pqc'}, tun_name='tun0', tun_addr='10.8.0.1/24')
+            ipc = IpcServer(st, role='permtest')
+            ipc.start()
+            time.sleep(0.3)
+            mode = os.stat(du.socket_path('permtest')).st_mode & 0o777
+            test('IpcServer socket is 0666', mode == 0o666)
+        finally:
+            if ipc:
+                ipc.stop()
+            du.socket_path = orig
+
+
+def test_vpnctl_eacces_handling():
+    """vpnctl reports 'root-owned socket' on EACCES instead of 'not running'."""
+    import socket
+    import tempfile
+    import cli.vpnctl as vp
+    from cli.vpnctl import _read_status_sock
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, 'rootowned.sock')
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        srv.listen(1)
+        os.chmod(path, 0o000)  # simulate root-only socket
+        orig = vp.socket_path
+        vp.socket_path = lambda role, instance=None: path
+        try:
+            try:
+                _read_status_sock(path)
+                ok = False
+            except PermissionError:
+                ok = True
+            test('root-owned socket raises PermissionError, not silent None', ok)
+        finally:
+            vp.socket_path = orig
+            os.chmod(path, 0o666)
+            srv.close()
+            os.unlink(path)
+
+
+def test_pool_pressure_reclaim():
+    """reclaim_idle frees idle slots under pool pressure (kill -> quick reconnect)."""
+    from server.session_manager import SessionManager
+    mgr = SessionManager({'gateway': '10.8.0.1', 'dns': '10.8.0.1',
+                          'tun_net': '10.8.0.0/24', 'max_clients': 2})
+    a = mgr.welcome_payload()
+    b = mgr.welcome_payload()
+    c = mgr.welcome_payload()
+    ok_full = a is not None and b is not None and c is None
+    test('pool full returns None before reclaim', ok_full)
+    for s in list(mgr.sessions.values()):
+        s.last_seen = 0  # force them all to look idle
+    d = mgr.welcome_payload()
+    test('idle reclaim frees a slot under pressure', d is not None)
+
+
 if __name__ == '__main__':
     print('=== PQ-VPN Common Module Tests ===')
     print()
@@ -547,6 +616,9 @@ if __name__ == '__main__':
     test_parse_brief_line()
     test_drain_stderr_resumed_evidence()
     test_status_negotiated_lifecycle()
+    test_ipc_server_socket_permissions()
+    test_vpnctl_eacces_handling()
+    test_pool_pressure_reclaim()
     print()
     total = PASS + FAIL
     print(f'{PASS}/{total} passed' + (' ✅' if FAIL == 0 else ' ❌'))

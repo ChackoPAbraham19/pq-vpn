@@ -155,10 +155,19 @@ export PQVPN_SKIP_DNS=1
 PING_FAILS=0
 
 log "Step 1/5: building netns harness"
+# Refuse to start over ghost daemons — they hold stale IPC sockets and honestly
+# report nothing. Teardown kills them, but only if it ran.
+if pgrep -f "vpn_server.py|vpn_client.py" >/dev/null 2>&1; then
+    fail "stale pqvpn daemons still running. Kill first:"
+    echo "  sudo pkill -f 'vpn_server.py|vpn_client.py'; sudo bash scripts/setup_routing.sh --teardown"
+    exit 1
+fi
 bash "${SCRIPT_DIR}/setup_routing.sh"
 
 log "Step 2/5: starting server (${MODE}) in vpn_ns1"
-ip netns exec vpn_ns1 "$PY" "${PDIR}/server/vpn_server.py" --config "$SERVER_CFG" &
+# setsid detaches daemons into their own sessions: Ctrl-C or closing the
+# launcher terminal must never propagate to --keep tunnels.
+setsid ip netns exec vpn_ns1 "$PY" "${PDIR}/server/vpn_server.py" --config "$SERVER_CFG" >/tmp/pqvpn-demo-server.log 2>&1 &
 SERVER_PID=$!
 sleep 3
 
@@ -176,7 +185,8 @@ for ((i=0; i<NCLIENTS; i++)); do
     ns="vpn_ns$((i+2))"
     cfg="${CLIENT_CFGS[$i]}"
     log "  client $((i+1)): ${ns} with $(basename "$cfg")"
-    ip netns exec "$ns" "$PY" "${PDIR}/client/vpn_client.py" --config "$cfg" &
+    # setsid detaches each client daemon too
+    setsid ip netns exec "$ns" "$PY" "${PDIR}/client/vpn_client.py" --config "$cfg" >"/tmp/pqvpn-demo-client$((i+1)).log" 2>&1 &
     CLIENT_PIDS+=($!)
     sleep 2
 done
@@ -213,7 +223,7 @@ if SERVER_ALIVE_CHECK && command -v iperf3 >/dev/null 2>&1; then
         ip netns exec "$ns" iperf3 -c 10.8.0.1 -t 10 -f m 2>/dev/null \
             | { grep -E "sender|receiver" || true; } | sed 's/^/    /' || true
     done
-    pkill -f "iperf3 -s" >/dev/null 2>&1 || true
+    # Leave iperf3 server running for manual testing; will be reaped by teardown
 else
     if ! SERVER_ALIVE_CHECK; then
         log "  server dead — skipping iperf3"

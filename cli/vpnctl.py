@@ -93,6 +93,12 @@ def _spawn_daemon(mode: str, config_path: str):
 
 
 def _read_status_sock(sp: str) -> dict | None:
+    """Read a status snapshot from an IPC socket path.
+
+    Returns None when the socket is missing/unreadable. Raises PermissionError
+    for root-owned sockets so callers can say *that* instead of lying that
+    nothing is running.
+    """
     if not os.path.exists(sp):
         return None
     try:
@@ -102,6 +108,8 @@ def _read_status_sock(sp: str) -> dict | None:
         data = sock.recv(4096)
         sock.close()
         return json.loads(data.decode().strip())
+    except PermissionError:
+        raise
     except (socket.error, json.JSONDecodeError):
         return None
 
@@ -242,20 +250,29 @@ def _print_status(label: str, s: dict):
 @cli.command()
 def status():
     """Show VPN connection status for the server and every client instance."""
-    server = _read_status('server')
+    try:
+        server = _read_status('server')
+    except PermissionError:
+        server = 'denied'
     client_socks = discover_sockets('client')
 
-    if not server and not client_socks:
+    if server is None and not client_socks:
         click.echo('VPN is not running.')
         return
 
-    if server:
+    if isinstance(server, dict):
         _print_status('Server', server)
+    elif server == 'denied':
+        click.echo('Server: running (root-owned socket — re-run with sudo)')
 
     for sp in client_socks:
         inst = instance_label(sp)
         label = f'Client[{inst}]' if inst else 'Client'
-        s = _read_status_sock(sp)
+        try:
+            s = _read_status_sock(sp)
+        except PermissionError:
+            click.echo(f'{label}: running (root-owned socket — re-run with sudo)')
+            continue
         if not s:
             click.echo(f'{label}: not running')
             continue

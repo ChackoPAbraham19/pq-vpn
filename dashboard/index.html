@@ -198,7 +198,7 @@ function render(s) {
   hsChart.data.datasets[0].data[idx] = 1;
   hsChart.data.labels = ['Classical', 'PQC'];
   hsChart.update('none');
-  $('resume-note').textContent = client ? (client.resumed ? '✓ handshake resumed from ticket cache' : 'full handshake (no ticket)') : '';
+  $('resume-note').textContent = client ? (client.resumed ? '✓ handshake resumed from ticket cache' : 'full handshake (ticket not accepted)') : '';
   $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
 

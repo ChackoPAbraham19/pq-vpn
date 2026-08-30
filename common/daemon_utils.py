@@ -148,6 +148,14 @@ class IpcServer:
             pass
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(self._sock_path)
+        # Status is world-readable and commands (disconnect) are reachable by
+        # any local user. Acceptable for a single-user dev/demo tool — VPN host
+        # security comes from the mTLS boundary, not socket perms. Without this,
+        # daemons run as root but user-side vpnctl/dashboard get EACCES.
+        try:
+            os.chmod(self._sock_path, 0o666)
+        except OSError:
+            pass
         server.listen(1)
         server.settimeout(0.5)
 
