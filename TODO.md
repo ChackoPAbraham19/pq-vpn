@@ -134,7 +134,7 @@
 - [x] netns run (2026-09-16, live, PQC, 3 clients): reconnect landed on 10.8.0.4 / port 14433 as client #4 with s_server count still 3; restarted client `connected` at 3 s uptime (old code: still inside its 5 s wait); dashboard 401 → kick ok with token
 - [x] netns run (2026-09-16, 2 clients): bare `nc` to 14430 claimed `#3 10.8.0.4/14433 in 0/out 0`, reaped at 10 s (`no mTLS handshake`), real clients unaffected; ns3 restart → `#4` on 14433 (FIFO slot reuse, in range), connected at 3 s, `s_server` count 2; dashboard 401 → kick `ok`
 - [x] Found by the kick test: an idle client never reconnected after a server-side teardown (TUN→TLS relay only noticed on its next write). Fixed with a per-session stop event cascaded from the TLS→TUN thread + keepalive `BrokenPipe`; `test_keepalive.py` 7/7
-- [ ] netns re-run of the kick: `#1` gone AND a new id back on 10.8.0.2/14431 within ~4 s
+- [x] netns re-run of the kick (2026-09-16): `#1` gone, client 1 back as `#3` on 10.8.0.4/14433 within 4 s; client log `connection lost` → `reconnecting in 1s` → `connected; assigned 10.8.0.4`
 
 ## Phase 2: Keepalive + reconnect [in progress]
 - [x] 15s keepalive control frame; server idle teardown 3×15s
