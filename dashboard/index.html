@@ -32,14 +32,23 @@
   #log li { padding: 2px 0; border-bottom: 1px dashed var(--border); color: var(--muted); }
   .chart-wrap { position: relative; height: 220px; }
   .muted { color: var(--muted); }
+  .token { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .token input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; width: 260px; max-width: 60vw; }
+  .client-card { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
+  .client-card:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+  .client-card h3 { font-size: 13px; margin-bottom: 4px; }
 </style>
 </head>
 <body>
 <header>
   <h1>🛡 PQ-VPN Dashboard</h1>
   <span class="pill" id="server-pill">server —</span>
-  <span class="pill" id="client-pill">client —</span>
+  <span class="pill" id="client-pill">clients —</span>
   <span class="muted" id="updated"></span>
+  <label class="token">
+    <span class="muted">token</span>
+    <input id="token" type="password" placeholder="X-PQVPN-Token (printed by dashboard_server)" autocomplete="off">
+  </label>
 </header>
 
 <div class="grid">
@@ -49,14 +58,14 @@
   </section>
 
   <section class="panel">
-    <h2>Client</h2>
-    <dl class="kv" id="client-kv"></dl>
+    <h2>Clients</h2>
+    <div id="clients"></div>
   </section>
 
   <section class="panel">
     <h2>Active Tunnels</h2>
     <table>
-      <thead><tr><th>#</th><th>IP</th><th>Port</th><th>Idle</th><th class="num">In</th><th class="num">Out</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>IP</th><th>Port</th><th>Idle</th><th class="num">In</th><th class="num">Out</th><th class="num">In kB/s</th><th class="num">Out kB/s</th><th></th></tr></thead>
       <tbody id="tunnels"></tbody>
     </table>
     <p class="muted" id="tunnels-empty">no clients connected</p>
@@ -95,7 +104,8 @@ const fmtRate = bps => {
 };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-let prev = null;
+let prev = null;                 // aggregate byte counters from the last snapshot
+let perClient = new Map();       // client id -> {t, in, out} for per-tunnel rates
 let speedHistory = { in: [], out: [] };
 const MAX_POINTS = 60;
 const log = $('log');
@@ -107,51 +117,95 @@ function pushLog(msg) {
   while (log.children.length > 80) log.removeChild(log.lastChild);
 }
 
+// Dashboard token: never served by the app; the user pastes what
+// dashboard_server printed. Kept per-browser in localStorage (best effort).
+const tokenInput = $('token');
+try { tokenInput.value = localStorage.getItem('pqvpn-dash-token') || ''; } catch (e) {}
+tokenInput.addEventListener('change', () => {
+  try { localStorage.setItem('pqvpn-dash-token', tokenInput.value); } catch (e) {}
+});
+
 function pill(el, state, label) {
   el.textContent = label;
   el.className = 'pill ' + (state === 'connected' || state === 'ok' ? 'ok' : state === 'reconnecting' || state === 'handshake-in-progress' ? 'mid' : 'down');
 }
 
-function renderKv(el, s) {
-  if (!s) { el.innerHTML = '<dt class="muted">—</dt><dd class="muted">not running</dd>'; return; }
-  const rows = [
+function kvRows(s) {
+  return [
     ['State', s.state],
     ['Mode', s.mode],
     ['Groups', s.groups],
     ['TUN', `${s.tun_name} ${s.tun_addr}`],
     ['Session', s.resumed ? 'resumed (ticket)' : 'full'],
     ['Uptime', s.uptime_seconds + 's'],
-  ];
-  el.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
+  ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
 }
 
-function renderTunnels(clients) {
+function renderKv(el, s) {
+  if (!s) { el.innerHTML = '<dt class="muted">—</dt><dd class="muted">not running</dd>'; return; }
+  el.innerHTML = kvRows(s);
+}
+
+function renderClients(clients) {
+  const el = $('clients');
+  if (!clients || !clients.length) { el.innerHTML = '<p class="muted">no client daemon running</p>'; return; }
+  el.innerHTML = clients.map(c => `
+    <div class="client-card">
+      <h3>Client${c._instance ? `[${esc(c._instance)}]` : ''} <span class="muted">· ${esc(c.state)}</span></h3>
+      <dl class="kv">${kvRows(c)}</dl>
+    </div>`).join('');
+}
+
+function rate(prevEntry, nowEntry, dt) {
+  if (!prevEntry) return [0, 0];
+  return [(nowEntry.in - prevEntry.in) / dt / KB, (nowEntry.out - prevEntry.out) / dt / KB];
+}
+
+function renderTunnels(clients, now) {
   const tbody = $('tunnels');
   $('tunnels-empty').style.display = (clients && clients.length) ? 'none' : '';
-  tbody.innerHTML = (clients || []).map(c => `
+  const seen = new Set();
+  tbody.innerHTML = (clients || []).map(c => {
+    seen.add(c.id);
+    const cur = { t: now, in: c.bytes_in, out: c.bytes_out };
+    const was = perClient.get(c.id);
+    const dt = was ? Math.max((now - was.t) / 1000, 0.01) : 1;
+    const [rIn, rOut] = rate(was, cur, dt);
+    perClient.set(c.id, cur);
+    return `
     <tr>
-      <td>#${c.id}</td>
-      <td>${c.ip}</td>
-      <td>${c.port}</td>
-      <td>${c.idle_seconds}s</td>
-      <td class="num">${fmt(c.bytes_in)}</td>
-      <td class="num">${fmt(c.bytes_out)}</td>
-      <td><button class="btn" onclick="kick(${c.id})">kick</button></td>
-    </tr>`).join('');
+      <td>#${esc(c.id)}</td>
+      <td>${esc(c.ip)}</td>
+      <td>${esc(c.port)}</td>
+      <td>${esc(c.idle_seconds)}s</td>
+      <td class="num">${esc(fmt(c.bytes_in))}</td>
+      <td class="num">${esc(fmt(c.bytes_out))}</td>
+      <td class="num">${rIn.toFixed(1)}</td>
+      <td class="num">${rOut.toFixed(1)}</td>
+      <td><button class="btn" data-kick="${esc(c.id)}">kick</button></td>
+    </tr>`;
+  }).join('');
+  for (const id of [...perClient.keys()]) if (!seen.has(id)) perClient.delete(id);
+  tbody.querySelectorAll('button[data-kick]').forEach(b => b.onclick = () => kick(Number(b.dataset.kick)));
 }
 
 function kick(id) {
-  fetch('/disconnect/' + id, { method: 'POST' })
-    .then(r => r.json())
-    .then(res => pushLog(`kick #${id}: ${res.ok ? 'sent' : (res.error || 'failed')}`))
+  const headers = {};
+  if (tokenInput.value) headers['X-PQVPN-Token'] = tokenInput.value;
+  fetch('/disconnect/' + id, { method: 'POST', headers })
+    .then(r => r.json().then(res => ({ status: r.status, res })))
+    .then(({ status, res }) => {
+      if (status === 401) pushLog(`kick #${id} rejected: set the dashboard token (printed by dashboard_server)`);
+      else pushLog(`kick #${id}: ${res.ok ? 'sent' : (res.error || 'failed')}`);
+    })
     .catch(e => pushLog(`kick #${id}: ${e}`));
 }
 
 const speedChart = new Chart($('throughput-chart'), {
   type: 'line',
   data: { labels: [], datasets: [
-    { label: 'client → server', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3, pointRadius: 0 },
-    { label: 'server → client', data: [], borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3, pointRadius: 0 },
+    { label: 'clients → server', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3, pointRadius: 0 },
+    { label: 'server → clients', data: [], borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3, pointRadius: 0 },
   ]},
   options: { animation: false, responsive: true, maintainAspectRatio: false,
     scales: { y: { beginAtZero: true, grid: { color: '#334155' } }, x: { grid: { color: 'transparent' } } },
@@ -166,12 +220,24 @@ const hsChart = new Chart($('handshake-chart'), {
     scales: { y: { beginAtZero: true, title: { display: true, text: 'state', color: '#94a3b8' }, grid: { color: '#334155' } }, x: { grid: { color: 'transparent' } } } }
 });
 
-function updateSpeed(client) {
-  const now = Date.now();
-  if (prev && client) {
+// Aggregate counters across every tunnel. The server's totals are the
+// natural source (they cover all clients); fall back to summing the client
+// daemons when only clients are visible. Server bytes_in counts payload and
+// bytes_out counts framed bytes — fine for a rate chart.
+function aggregate(s) {
+  if (s.server) return { in: s.server.bytes_in, out: s.server.bytes_out };
+  if (s.clients && s.clients.length) {
+    // client bytes_out flows toward the server, i.e. server-side "in".
+    return s.clients.reduce((a, c) => ({ in: a.in + c.bytes_out, out: a.out + c.bytes_in }), { in: 0, out: 0 });
+  }
+  return null;
+}
+
+function updateSpeed(agg, now) {
+  if (prev && agg) {
     const dt = Math.max((now - prev.t) / 1000, 0.01);
-    speedHistory.in.push((client.bytes_out - prev.out) / dt / KB);
-    speedHistory.out.push((client.bytes_in - prev.in) / dt / KB);
+    speedHistory.in.push((agg.in - prev.in) / dt / KB);
+    speedHistory.out.push((agg.out - prev.out) / dt / KB);
   } else {
     speedHistory.in.push(0); speedHistory.out.push(0);
   }
@@ -181,32 +247,38 @@ function updateSpeed(client) {
   speedChart.data.datasets[0].data = speedHistory.in.slice();
   speedChart.data.datasets[1].data = speedHistory.out.slice();
   speedChart.update('none');
-  prev = client ? { t: now, in: client.bytes_in, out: client.bytes_out } : null;
+  prev = agg ? { t: now, in: agg.in, out: agg.out } : null;
 }
 
 function render(s) {
-  const server = s.server, client = s.client;
+  const now = Date.now();
+  const server = s.server, clients = s.clients || [];
+  const up = clients.filter(c => c.state === 'connected').length;
   pill($('server-pill'), server ? server.state : 'down', 'server · ' + (server ? server.state : 'offline'));
-  pill($('client-pill'), client ? client.state : 'down', 'client · ' + (client ? client.state : 'offline'));
+  pill($('client-pill'), clients.length ? (up === clients.length ? 'connected' : (up ? 'reconnecting' : clients[0].state)) : 'down',
+       clients.length ? `clients · ${up}/${clients.length} connected` : 'clients · none');
   renderKv($('server-kv'), server);
-  renderKv($('client-kv'), client);
-  renderTunnels(server && server.clients);
-  updateSpeed(client);
-  const mode = client ? client.mode : (server ? server.mode : 'classical');
+  renderClients(clients);
+  renderTunnels(server && server.clients, now);
+  updateSpeed(aggregate(s), now);
+  const mode = clients.length ? clients[0].mode : (server ? server.mode : 'classical');
   const idx = mode === 'pqc' ? 1 : 0;
   hsChart.data.datasets[0].data = [0, 0];
   hsChart.data.datasets[0].data[idx] = 1;
   hsChart.data.labels = ['Classical', 'PQC'];
   hsChart.update('none');
-  $('resume-note').textContent = client ? (client.resumed ? '✓ handshake resumed from ticket cache' : 'full handshake (ticket not accepted)') : '';
+  const resumed = clients.filter(c => c.resumed).length;
+  $('resume-note').textContent = clients.length
+    ? (resumed ? `✓ ${resumed}/${clients.length} handshakes resumed from ticket cache` : 'full handshakes (tickets not accepted)')
+    : '';
   $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
 
 function firstPaint(s) {
-  if (!s.client || !s.server) return;
-  const labels = ['server', 'client'];
-  pushLog('dashboard connected — server ' + (s.server.state) + ', client ' + (s.client.state));
-  prev = { t: Date.now(), in: s.client.bytes_in, out: s.client.bytes_out };
+  const n = (s.clients || []).length;
+  pushLog('dashboard connected — server ' + (s.server ? s.server.state : 'offline') + `, ${n} client daemon${n === 1 ? '' : 's'}`);
+  const agg = aggregate(s);
+  prev = agg ? { t: Date.now(), in: agg.in, out: agg.out } : null;
 }
 
 let connected = false;

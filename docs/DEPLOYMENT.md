@@ -95,6 +95,10 @@ Verify:
 sudo ip netns exec vpn_ns2 ping -c5 10.8.0.1          # tunnel up
 .venv/bin/python3 cli/vpnctl.py status                # session state, resumed flag
 .venv/bin/python3 dashboard/dashboard_server.py &     # optional dashboard UI (http://127.0.0.1:8080)
+# It prints a one-time token; paste it into the page's "token" box to enable
+# kick/rekey. Set PQVPN_DASH_TOKEN or --token for a stable one. Keep the
+# dashboard on 127.0.0.1 unless you have set a token — status is readable by
+# anyone who can reach the port.
 ```
 
 ## 6. VPS deployment (Phase 7)

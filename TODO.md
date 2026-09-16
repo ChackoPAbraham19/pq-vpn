@@ -167,6 +167,9 @@
 - [x] `dashboard/test_dashboard.py` 9/9: IPC envelope compat, FastAPI endpoints, WS stream, feed missing-socket safety, uvicorn live boot + serve
 - [x] Full suite: 11/11 + 8/8 + 5/5 + 11/11 + 9/9 pass
 - [x] Verified vpnctl `_read_status` still works with new envelope-compatible IPC
+- [x] Hardening: `X-PQVPN-Token` on `POST /disconnect`/`/rekey` (CSRF-safe via preflight + secret, never served by GET); single background poller (`feed.latest()`) so N tabs = 1 IPC poll; `lifespan` replaces deprecated `on_event`
+- [x] UI: every client instance rendered, aggregate throughput from server counters, per-tunnel kB/s columns, all values escaped
+- [x] `dashboard/test_dashboard.py` 25/25 (401/401/503 auth path, no-GET token, reader-does-not-poll)
 - [ ] Live browser session: connect/drop/reconnect shows state + throughput + kick in real time
 
 ## Phase 6: Report + demo prep [completed]

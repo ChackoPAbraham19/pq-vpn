@@ -72,13 +72,25 @@ def test_fastapi_endpoints():
         ok_index = r.status_code == 200 and 'PQ-VPN Dashboard' in r.text
         test('GET / serves dashboard index.html', ok_index, f'status={r.status_code}')
 
+        auth = {'X-PQVPN-Token': ds.DASH_TOKEN}
+
         r = client.post('/disconnect/1')
+        test('POST /disconnect without token → 401', r.status_code == 401, f'status={r.status_code} {r.text[:80]}')
+        r = client.post('/disconnect/1', headers={'X-PQVPN-Token': 'wrong'})
+        test('POST /disconnect with wrong token → 401', r.status_code == 401, f'status={r.status_code}')
+
+        r = client.post('/disconnect/1', headers=auth)
         ok_off = r.status_code == 503
-        test('POST /disconnect when server down → 503', ok_off, f'status={r.status_code} {r.text[:80]}')
+        test('POST /disconnect (auth) when server down → 503', ok_off, f'status={r.status_code} {r.text[:80]}')
 
         r = client.post('/rekey')
+        test('POST /rekey without token → 401', r.status_code == 401)
+        r = client.post('/rekey', headers=auth)
         ok_rekey = r.status_code == 200 and r.json().get('ok') is False
-        test('POST /rekey responds (unsupported)', ok_rekey, r.text[:80])
+        test('POST /rekey (auth) responds (unsupported)', ok_rekey, r.text[:80])
+
+        r = client.get('/api/token')
+        test('token is never served by a GET', r.status_code == 404, f'status={r.status_code}')
     finally:
         client.close()
 
@@ -205,6 +217,54 @@ def test_feed_sees_client_instances():
             pass
 
 
+def test_single_poller():
+    """Readers use the cached snapshot: 3 WS clients + 5 GETs cost ~0 extra
+    IPC polls beyond what the background thread does on its interval."""
+    from fastapi.testclient import TestClient
+    import dashboard.dashboard_server as ds
+
+    calls = {'n': 0}
+    orig = ds.StatusFeed.snapshot
+
+    def counting(self):
+        calls['n'] += 1
+        return orig(self)
+
+    ds.StatusFeed.snapshot = counting
+    ds.feed.interval = 10.0  # background thread polls once, then sleeps
+    try:
+        with TestClient(ds.app) as client:
+            time.sleep(0.2)
+            baseline = calls['n']
+            for _ in range(5):
+                client.get('/api/status')
+            sockets = [client.websocket_connect('/ws/status').__enter__() for _ in range(3)]
+            for ws in sockets:
+                ws.receive_json()
+            for ws in sockets:
+                ws.__exit__(None, None, None)
+            extra = calls['n'] - baseline
+        test('GET/WS readers do not trigger IPC polls', extra == 0, f'extra polls={extra} baseline={baseline}')
+        test('background poller ran at least once', baseline >= 1, f'baseline={baseline}')
+    finally:
+        ds.StatusFeed.snapshot = orig
+        ds.feed.interval = ds.POLL_INTERVAL
+
+
+def test_token_resolution():
+    import dashboard.dashboard_server as ds
+    os.environ['PQVPN_DASH_TOKEN'] = 'from-env'
+    try:
+        test('explicit --token wins', ds.resolve_token('cli') == 'cli')
+        test('env token used when no flag', ds.resolve_token(None) == 'from-env')
+    finally:
+        del os.environ['PQVPN_DASH_TOKEN']
+    a, b = ds.resolve_token(None), ds.resolve_token(None)
+    test('random token otherwise (unique, long)', a != b and len(a) >= 24)
+    test('token_ok rejects None/empty', not ds.token_ok(None) and not ds.token_ok(''))
+
+
+
 if __name__ == '__main__':
     print('=== PQ-VPN Phase 5 (dashboard) Tests ===')
     print()
@@ -215,6 +275,8 @@ if __name__ == '__main__':
     test_status_feed_change_detection()
     test_feed_under_missing_sockets()
     test_feed_sees_client_instances()
+    test_single_poller()
+    test_token_resolution()
     print()
     total = PASS + FAIL
     print(f'{PASS}/{total} passed' + (' ✅' if FAIL == 0 else ' ❌'))

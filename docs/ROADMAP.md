@@ -157,6 +157,11 @@ unambiguous vs tunnel data.
   (stops relay, terminates the per-client `s_server`, frees the IP).
 - Deps: `fastapi`, `uvicorn[standard]`, `websockets` added to `requirements.txt`.
 - Tests: `dashboard/test_dashboard.py` 9/9 + live uvicorn boot/serve check.
+- Hardening pass (post Phase 6): one background poller feeds every reader
+  (`StatusFeed.latest()`); `POST /disconnect`/`/rekey` require `X-PQVPN-Token`
+  (`--token` / `$PQVPN_DASH_TOKEN` / printed random), which also closes CSRF via
+  the CORS preflight; `lifespan` replaces `on_event`; UI shows every client
+  instance, aggregate throughput, and per-tunnel rates. Tests 25/25.
 
 ### Phase 6 — Report + demo
 - `docs/BENCHMARKS.md`: compiled report over the raw CSVs (full handshake,

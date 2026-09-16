@@ -211,7 +211,13 @@ Two request shapes:
 - **Bare request** (vpnctl): `connect → send JSON query → recv JSON response` returning the status snapshot.
 - **Command request**: `{'command': 'disconnect', 'id': ...}` → the daemon's `command_handler` runs it and replies with `{'status': {...}, 'result': {...}}`. Implemented commands: `disconnect` (force session teardown), `clients` (list tunnels), `status`.
 
-The server uses a 100ms `select()` wait so bare status polls never block on a full 2s recv timeout. The dashboard polls both sockets every 0.5s and additionally exposes `POST /disconnect/{id}` to kick a tunnel from the browser.
+The server uses a 100ms `select()` wait so bare status polls never block on a full 2s recv timeout.
+
+The sockets are created `0666` so a non-root `vpnctl`/dashboard can talk to root-owned daemons. That means **any local user** can read status and issue `disconnect`/`shutdown` — acceptable for a single-user host, since the same user could already stop the process; on a shared machine move the sockets under a group-restricted directory.
+
+### Dashboard
+
+`dashboard/dashboard_server.py` runs **one** background poller (`StatusFeed`) that refreshes a cached snapshot every 0.5s; every WebSocket client and `GET /api/status` reads that cache, so open tabs do not multiply IPC load. Mutating endpoints (`POST /disconnect/{id}`, `POST /rekey`) require the dashboard token in an `X-PQVPN-Token` header: the custom header forces a CORS preflight, which blocks cross-origin pages from driving the dashboard (CSRF), and the secret guards a LAN-exposed instance. The token comes from `--token`, `$PQVPN_DASH_TOKEN`, or is generated and printed at startup; it is never served by any endpoint, so the operator pastes it into the page (kept in `localStorage`). The UI renders every client daemon instance, aggregate throughput from the server's counters, and per-tunnel rates.
 
 ## Security Considerations
 
