@@ -1,0 +1,29 @@
+# systemd unit for the PQ-VPN server on a VPS.
+#   sudo cp deploy/pqvpn-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now pqvpn-server
+#   journalctl -u pqvpn-server -f
+# scripts/deploy_vps.sh does all of this.
+[Unit]
+Description=PQ-VPN server (post-quantum TLS tunnel)
+Documentation=https://github.com/ChackoPAbraham19/VPN
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/pqvpn
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/pqvpn/.venv/bin/python3 /opt/pqvpn/server/vpn_server.py --config server/config-vps.yaml
+# SIGTERM runs the daemon's clean teardown (NAT rules, dnsmasq, IPC socket).
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=3
+# TUN + iptables need CAP_NET_ADMIN; the daemon runs as root today, so this is
+# documentation of intent rather than a sandbox.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

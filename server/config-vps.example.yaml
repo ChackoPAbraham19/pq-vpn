@@ -1,0 +1,29 @@
+# PQ-VPN server config for a real VPS (Phase 7).
+#
+#   cp server/config-vps.example.yaml server/config-vps.yaml   # git-ignored
+#   edit outbound_iface to the VPS's primary NIC (ip route show default)
+#
+# Everything else matches server/config-pqc.yaml; only the egress interface and
+# the persist_sysctl flag differ from the netns harness.
+mode: pqc
+host: 0.0.0.0
+port: 14430                  # welcome port — open in the cloud security group + ufw
+tun_name: tun0
+tun_addr: 10.8.0.1/24
+tun_net: 10.8.0.0/24
+gateway: 10.8.0.1
+dns: 10.8.0.1
+tun_mtu: 1400
+cert_dir: pki/certs/pqc
+groups: X25519MLKEM768
+nat: true
+outbound_iface: eth0         # VPS primary NIC, NOT a veth (ip route show default)
+persist_sysctl: true         # write /etc/sysctl.d/99-pqvpn.conf so ip_forward survives reboot
+dnsmasq: true
+dns_upstream: 1.1.1.1
+keepalive_interval: 15
+handshake_timeout: 10        # reap welcome slot claims that never finish mTLS (s)
+max_clients: 3               # data ports 14431..14433 (data_port_base + slot) — open these too
+data_port_base: 14431
+welcome_rate: 1.0            # welcome-port token bucket per source IP
+welcome_burst: 3

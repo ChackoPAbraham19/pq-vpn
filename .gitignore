@@ -36,3 +36,6 @@ graphify-out/
 
 # Lock files
 .~lock.*
+# VPS deployment config (contains the real public IP / NIC)
+server/config-vps.yaml
+client/config-vps.yaml

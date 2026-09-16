@@ -1,0 +1,22 @@
+# PQ-VPN client config for a real VPS server (Phase 7).
+#
+#   cp client/config-vps.example.yaml client/config-vps.yaml   # git-ignored
+#   set server_host to the VPS public IP
+#
+# Run on any Linux box with the PQC OpenSSL stack + pki/certs/pqc/{ca,client}.*:
+#   sudo .venv/bin/python3 client/vpn_client.py --config client/config-vps.yaml
+# Full DNS management (resolvectl / resolv.conf) is active here — unlike the
+# netns harness, do NOT set PQVPN_SKIP_DNS.
+mode: pqc
+server_host: 203.0.113.5     # <-- VPS public IP
+server_port: 14430
+tun_name: tun0
+tun_mtu: 1400
+route_metric: 50
+cert_dir: pki/certs/pqc
+groups: X25519MLKEM768
+keepalive_interval: 15
+backoff_min: 1.0
+backoff_max: 30.0
+resume_cache: true
+handshake_timeout: 10

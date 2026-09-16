@@ -112,40 +112,57 @@ sudo ip netns exec vpn_ns2 ping -c5 10.8.0.1          # tunnel up
   defaults) from your remote client IPs only. No other inbound ports. Ports are
   bound to client slots, so reconnects always land back inside this range.
 
-### 6.2 Build (same as step 1–2) + PKI
+### 6.2 One-command deploy
 
-Copy the repo, run steps 1–3 on the VPS (or copy `/opt/openssl-pqc` build to
-avoid a 15-min recompile — copying the whole tree works since everything is
-statically-ish linked under one prefix).
+Everything below is scripted in `scripts/deploy_vps.sh` (idempotent; `--dry-run`
+prints every command without connecting):
+
+```bash
+cp server/config-vps.example.yaml server/config-vps.yaml   # git-ignored
+#   edit outbound_iface -> the VPS primary NIC (`ip route show default` on the box)
+bash pki/gen_pqc_ca.sh                                     # if not already generated
+bash scripts/deploy_vps.sh --dry-run user@<VPS_IP>          # review
+bash scripts/deploy_vps.sh user@<VPS_IP>                    # deploy
+```
+
+What it does on the VPS, in order:
+
+1. `rsync` the repo to `/opt/pqvpn` (certs included; `.venv`/`.git` excluded).
+2. Build the PQC OpenSSL stack with `scripts/install_custom_openssl.sh` **only if**
+   `/opt/openssl-pqc` is missing (~15 min), then verify the provider lists
+   `mlkem768` and `mldsa65`.
+3. `python3 -m venv .venv` + `requirements.txt`; apt `iproute2 iptables dnsmasq`.
+4. `ufw allow` for the welcome port and `data_port_base..data_port_base+max_clients-1`
+   (read from your config; 14430 + 14431–14433 by default).
+5. Install `deploy/pqvpn-server.service`, `systemctl enable --now pqvpn-server`,
+   print `systemctl status` and `vpnctl status server`.
 
 ### 6.3 Server config
 
-`server/config-vps.yaml` (not committed) — the `outbound_iface` is the VPS's
-primary NIC (e.g. `eth0`), NOT a veth:
+`server/config-vps.example.yaml` is the template; the only lines that differ from
+the netns config are `outbound_iface: eth0` and `persist_sysctl: true`. It also
+carries the hardening knobs: `handshake_timeout`, `max_clients`/`data_port_base`
+(which define the firewall range), `welcome_rate`/`welcome_burst`.
 
-```yaml
-mode: pqc                    # or classical
-host: 0.0.0.0
-port: 14430
-tun_name: tun0
-tun_addr: 10.8.0.1/24
-tun_net: 10.8.0.0/24
-gateway: 10.8.0.1
-dns: 10.8.0.1
-tun_mtu: 1400
-cert_dir: pki/certs/pqc
-groups: X25519MLKEM768
-nat: true
-outbound_iface: eth0        # VPS primary NIC
-persist_sysctl: true        # survive reboots
-dnsmasq: true
-dns_upstream: 1.1.1.1
-keepalive_interval: 15
-handshake_timeout: 10       # reap welcome slot claims that never finish mTLS
-max_clients: 3              # => data ports 14431..14433 (data_port_base + slot)
+The service unit (`deploy/pqvpn-server.service`) runs the daemon as root from
+`/opt/pqvpn` with `PYTHONUNBUFFERED=1`, restarts on failure, and stops with
+`SIGTERM` so the daemon's own teardown removes NAT rules and dnsmasq. Logs:
+`journalctl -u pqvpn-server -f`.
+
+### 6.4 Client
+
+On any Linux machine with the PQC OpenSSL stack and `pki/certs/pqc/{ca,client}.*`:
+
+```bash
+cp client/config-vps.example.yaml client/config-vps.yaml     # set server_host
+sudo .venv/bin/python3 client/vpn_client.py --config client/config-vps.yaml
+curl ifconfig.me                                             # => VPS IP
+.venv/bin/python3 cli/vpnctl.py status
 ```
 
-### 6.4 ufw + security group
+Unlike the netns harness, leave `PQVPN_SKIP_DNS` unset so the pushed DNS is applied.
+
+### 6.4b ufw + security group
 
 ```bash
 # welcome port + one data port per client slot (data_port_base .. +max_clients-1)
@@ -154,13 +171,15 @@ sudo ufw enable
 sudo ufw status verbose
 ```
 
-(The VPS cloud firewall should match the same allow-list; the OS ufw is defense
+(`deploy_vps.sh` opens these ports to any source; tighten to your client IPs as
+above. The VPS cloud firewall must match the same allow-list; the OS ufw is defense
 in depth.)
 
 ### 6.5 Rollback / rebuild
 
 `scripts/rollback.sh` reverses the OpenSSL build (removes `/opt/openssl-pqc`).
 `install_custom_openssl.sh` is idempotent-safe to re-run for a fresh rebuild.
+Re-running `scripts/deploy_vps.sh` re-syncs code/config and restarts the service.
 
 ---
 

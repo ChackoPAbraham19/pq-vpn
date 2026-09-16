@@ -184,8 +184,14 @@
 - [x] Added `client/config-pqc-ns3.yaml` / `config-pqc-ns4.yaml` (PQC multi-client demo configs)
 - [x] netns run (2026-08-26, live): `scripts/demo.sh --mode pqc --clients 3` full pass — 3 tunnels stable through pings (0% loss, ~1ms) + concurrent iperf3, clean teardown. Fixed en route: iptables arg order (tests had blessed it), server tun0 never addressed/up'd, tunnel-self-blackhole (missing /32 transport route), TUN EBUSY reconnect wedge, relay teardown on transient TUN-write errors
 
-## Phase 7: Capstone — VPS deployment (payment, LAST) [pending]
-- [ ] Buy x86 VPS; deploy validated code + config-vps.yaml
-- [ ] ufw + cloud security group for TCP 14430
-- [ ] Real-WAN handshake, curl ifconfig.me, 2 clients, dashboard
+## Phase 7a: VPS deployment prep (no purchase) [completed]
+- [x] `server/config-vps.example.yaml` / `client/config-vps.example.yaml` (real configs git-ignored)
+- [x] `deploy/pqvpn-server.service` — systemd unit, SIGTERM → clean NAT/dnsmasq teardown, restart on failure
+- [x] `scripts/deploy_vps.sh [--dry-run] user@host` — rsync, build stack if missing + provider verify, venv, ufw for welcome + slot port range, enable service, print status (idempotent)
+- [x] `docs/DEPLOYMENT.md` §6 rewritten around the script
+
+## Phase 7b: Capstone — run on a real VPS (payment, LAST) [pending]
+- [ ] Buy x86 VPS (Ubuntu 24.04); `bash scripts/deploy_vps.sh user@<ip>`
+- [ ] Cloud security group: TCP 14430 + 14431–14433 from client IPs
+- [ ] Real-WAN handshake, `curl ifconfig.me` = VPS IP, DNS via tunnel, 2 clients, dashboard
 - [ ] Append real-WAN numbers to BENCHMARKS.md
