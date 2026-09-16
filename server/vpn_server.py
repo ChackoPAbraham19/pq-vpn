@@ -256,6 +256,13 @@ def main():
                 return {'ok': True}
             if cmd == 'clients':
                 return {'ok': True, 'clients': manager.snapshot()}
+            if cmd == 'shutdown':
+                # Graceful daemon stop: the main loop's stop.wait wakes, and
+                # the finally block runs NAT/IPC teardown — unlike a SIGKILL,
+                # which would leak iptables rules.
+                print('[server] shutdown requested over IPC')
+                stop.set()
+                return {'ok': True}
             return {'error': f'unknown command: {cmd}'}
 
         status = StatusTracker(

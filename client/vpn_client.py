@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import sys
 import time
@@ -317,7 +318,24 @@ def main():
 
         status = StatusTracker(config, tun_name=config.get('tun_name', 'tun0'),
                                tun_addr='pending')
-        ipc = IpcServer(status, role='client', instance=config.get('instance'))
+
+        def ipc_command(line: str) -> dict:
+            """Handle vpnctl IPC commands (shutdown)."""
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                return {'error': 'invalid json'}
+            cmd = payload.get('cmd')
+            if cmd == 'shutdown':
+                # Graceful stop: the reconnect loop sees stop set and exits
+                # cleanly (same path as SIGTERM/SIGINT).
+                print('[client] shutdown requested over IPC')
+                stop.set()
+                return {'ok': True}
+            return {'error': f'unknown command: {cmd}'}
+
+        ipc = IpcServer(status, role='client', instance=config.get('instance'),
+                        command_handler=ipc_command)
         ipc.start()
 
         backoff = config.get('backoff_min', 1.0)

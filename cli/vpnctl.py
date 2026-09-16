@@ -13,7 +13,7 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
 from common.daemon_utils import (socket_path, pid_path, read_pid_file,
-                                 discover_sockets, instance_label)
+                                 discover_sockets, instance_label, ipc_request)
 
 
 def _detect_mode(config_path) -> str:
@@ -118,17 +118,46 @@ def _read_status(role: str, instance: str | None = None) -> dict | None:
     return _read_status_sock(socket_path(role, instance))
 
 
-def _kill_by_role(role: str, instance: str | None = None):
+def _kill_by_role(role: str, instance: str | None = None) -> bool:
+    """Stop one daemon. Returns True if a shutdown was requested.
+
+    Prefers the IPC 'shutdown' command: the socket is 0666, so this works
+    for non-root callers even when the daemon runs as root, and it runs the
+    daemon's clean teardown (e.g. the server's NAT cleanup) which a SIGKILL
+    would skip. Falls back to signals, reporting permission errors honestly
+    instead of crashing.
+    """
+    try:
+        reply = ipc_request(role, json.dumps({'cmd': 'shutdown'}), instance)
+    except (OSError, ValueError):
+        reply = None
+    # The reply wraps the command handler's dict under 'result'
+    # (see IpcServer: {'status': ..., 'result': handler(command)}).
+    inner = reply.get('result') if isinstance(reply, dict) else None
+    if isinstance(inner, dict) and inner.get('ok'):
+        time.sleep(0.5)  # let the daemon run its teardown and exit
+        for p in [socket_path(role, instance), pid_path(role, instance)]:
+            try:
+                os.unlink(p)
+            except (FileNotFoundError, PermissionError):
+                pass
+        return True
+
     pid = read_pid_file(role, instance)
     if not pid:
         pid = _check_running(role, instance)
     if not pid:
-        return
+        return False
 
     try:
         os.kill(pid, signal.SIGTERM)
-    except (PermissionError, ProcessLookupError):
+    except ProcessLookupError:
         pass
+    except PermissionError:
+        label = f'{role}[{instance}]' if instance else role
+        click.echo(f'{label.capitalize()}: root-owned daemon — re-run with sudo',
+                   err=True)
+        return False
 
     for _ in range(15):
         if not os.path.exists(f'/proc/{pid}'):
@@ -139,12 +168,18 @@ def _kill_by_role(role: str, instance: str | None = None):
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            label = f'{role}[{instance}]' if instance else role
+            click.echo(f'{label.capitalize()}: root-owned daemon — re-run with sudo',
+                       err=True)
+            return False
 
     for p in [socket_path(role, instance), pid_path(role, instance)]:
         try:
             os.unlink(p)
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):
             pass
+    return True
 
 
 def _fmt_bytes(b: int) -> str:
@@ -210,9 +245,9 @@ def disconnect():
                 continue
             seen.add(key)
             if read_pid_file(role, inst) or _check_running(role, inst):
-                _kill_by_role(role, inst)
                 label = f'{role}[{inst}]' if inst else role
-                click.echo(f'{label.capitalize()} stopped.')
+                if _kill_by_role(role, inst):
+                    click.echo(f'{label.capitalize()} stopped.')
                 anything = True
     if not anything:
         click.echo('VPN is not running.')
@@ -248,7 +283,8 @@ def _print_status(label: str, s: dict):
 
 
 @cli.command()
-def status():
+@click.argument('role', required=False, type=click.Choice(['server', 'client']))
+def status(role: str | None):
     """Show VPN connection status for the server and every client instance."""
     try:
         server = _read_status('server')
@@ -260,23 +296,29 @@ def status():
         click.echo('VPN is not running.')
         return
 
-    if isinstance(server, dict):
-        _print_status('Server', server)
-    elif server == 'denied':
-        click.echo('Server: running (root-owned socket — re-run with sudo)')
+    if role in (None, 'server'):
+        if isinstance(server, dict):
+            _print_status('Server', server)
+        elif server == 'denied':
+            click.echo('Server: running (root-owned socket — re-run with sudo)')
+        elif role == 'server':
+            click.echo('Server: not running')
 
-    for sp in client_socks:
-        inst = instance_label(sp)
-        label = f'Client[{inst}]' if inst else 'Client'
-        try:
-            s = _read_status_sock(sp)
-        except PermissionError:
-            click.echo(f'{label}: running (root-owned socket — re-run with sudo)')
-            continue
-        if not s:
-            click.echo(f'{label}: not running')
-            continue
-        _print_status(label, s)
+    if role == 'client' and not client_socks:
+        click.echo('Client: not running')
+    if role in (None, 'client'):
+        for sp in client_socks:
+            inst = instance_label(sp)
+            label = f'Client[{inst}]' if inst else 'Client'
+            try:
+                s = _read_status_sock(sp)
+            except PermissionError:
+                click.echo(f'{label}: running (root-owned socket — re-run with sudo)')
+                continue
+            if not s:
+                click.echo(f'{label}: not running')
+                continue
+            _print_status(label, s)
 
 
 if __name__ == '__main__':

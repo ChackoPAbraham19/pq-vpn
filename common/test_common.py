@@ -599,6 +599,85 @@ def test_pool_pressure_reclaim():
     test('idle reclaim frees a slot under pressure', d is not None)
 
 
+def test_ipc_shutdown_command():
+    """A daemon's IPC 'shutdown' command sets its stop event and replies ok.
+
+    Both vpn_server and vpn_client wire this the same way; test the wiring.
+    """
+    import threading
+    import tempfile
+    import common.daemon_utils as du
+    from common.daemon_utils import IpcServer, StatusTracker, ipc_request
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        orig = du.socket_path
+        du.socket_path = lambda role, instance=None: os.path.join(
+            tmpdir, f'pqvpn-{role}' + (f'-{instance}' if instance else '') + '.sock')
+        ipc = None
+        try:
+            stop = threading.Event()
+
+            def handler(line: str) -> dict:
+                import json as _json
+                try:
+                    payload = _json.loads(line)
+                except _json.JSONDecodeError:
+                    return {'error': 'invalid json'}
+                if payload.get('cmd') == 'shutdown':
+                    stop.set()
+                    return {'ok': True}
+                return {'error': 'unknown command'}
+
+            st = StatusTracker({'mode': 'classical'}, tun_name='tun0',
+                               tun_addr='10.8.0.1/24')
+            ipc = IpcServer(st, role='shut', command_handler=handler)
+            ipc.start()
+            time.sleep(0.3)
+            reply = ipc_request('shut', '{"cmd": "shutdown"}')
+            ok = (isinstance(reply, dict)
+                  and (reply.get('result') or {}).get('ok') is True
+                  and stop.is_set())
+            test('IPC shutdown command sets stop event, replies ok', ok)
+        finally:
+            if ipc:
+                ipc.stop()
+            du.socket_path = orig
+
+
+def test_kill_by_role_eacces_honest():
+    """_kill_by_role reports root-owned daemons honestly, no traceback."""
+    import cli.vpnctl as vp
+    import click.testing  # noqa: F401  (ensure click present)
+
+    # Path A: IPC shutdown works (non-root happy path) -> returns True.
+    orig_ipcreq = vp.ipc_request
+    vp.ipc_request = lambda role, command='', instance=None: \
+        {'status': {}, 'result': {'ok': True}}
+    try:
+        # socket/pid files won't exist; unlink attempts must be tolerated.
+        ok = vp._kill_by_role('nonexistentrole')
+        test('IPC shutdown path returns True without signals', ok is True)
+    finally:
+        vp.ipc_request = orig_ipcreq
+
+    # Path B: IPC unreachable, daemon root-owned -> honest message, no raise.
+    vp.ipc_request = lambda *a, **k: (_ for _ in ()).throw(
+        ConnectionRefusedError('gone'))
+    orig_read_pid = vp.read_pid_file
+    orig_kill = os.kill
+    vp.read_pid_file = lambda role, instance=None: 424242
+    os.kill = lambda pid, sig: (_ for _ in ()).throw(
+        PermissionError(1, 'Operation not permitted'))
+    try:
+        ok = vp._kill_by_role('nonexistentrole')
+        test('root-owned daemon reported honestly (returns False, no crash)',
+             ok is False)
+    finally:
+        vp.ipc_request = orig_ipcreq
+        vp.read_pid_file = orig_read_pid
+        os.kill = orig_kill
+
+
 if __name__ == '__main__':
     print('=== PQ-VPN Common Module Tests ===')
     print()
@@ -619,6 +698,8 @@ if __name__ == '__main__':
     test_ipc_server_socket_permissions()
     test_vpnctl_eacces_handling()
     test_pool_pressure_reclaim()
+    test_ipc_shutdown_command()
+    test_kill_by_role_eacces_honest()
     print()
     total = PASS + FAIL
     print(f'{PASS}/{total} passed' + (' ✅' if FAIL == 0 else ' ❌'))
