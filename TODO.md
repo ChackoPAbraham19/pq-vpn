@@ -173,7 +173,7 @@
 - [x] Hardening: `X-PQVPN-Token` on `POST /disconnect`/`/rekey` (CSRF-safe via preflight + secret, never served by GET); single background poller (`feed.latest()`) so N tabs = 1 IPC poll; `lifespan` replaces deprecated `on_event`
 - [x] UI: every client instance rendered, aggregate throughput from server counters, per-tunnel kB/s columns, all values escaped
 - [x] `dashboard/test_dashboard.py` 25/25 (401/401/503 auth path, no-GET token, reader-does-not-poll)
-- [ ] Live browser session: connect/drop/reconnect shows state + throughput + kick in real time
+- [x] Live browser session (2026-09-16): both clients rendered, throughput chart under iperf3, kick from the button works with the token; kicked client drops and reappears with a new id
 
 ## Phase 6: Report + demo prep [completed]
 - [x] `docs/BENCHMARKS.md` — compiled all CSV results (full + resumed handshake, latency, throughput, file transfer), interpretation, Future Work, reproduction commands
@@ -183,6 +183,10 @@
 - [x] `benchmark/run_handshake_bench.py` gains `--out-dir` so dry-runs don't clobber committed 25-trial CSVs
 - [x] Added `client/config-pqc-ns3.yaml` / `config-pqc-ns4.yaml` (PQC multi-client demo configs)
 - [x] netns run (2026-08-26, live): `scripts/demo.sh --mode pqc --clients 3` full pass — 3 tunnels stable through pings (0% loss, ~1ms) + concurrent iperf3, clean teardown. Fixed en route: iptables arg order (tests had blessed it), server tun0 never addressed/up'd, tunnel-self-blackhole (missing /32 transport route), TUN EBUSY reconnect wedge, relay teardown on transient TUN-write errors
+
+## Phase 4c: live checks still owed (need sudo) [pending]
+- [ ] Welcome rate limiter on the wire: 8 rapid `nc -z` from vpn_ns4 → `welcome rate-limited: 192.168.220.2` logged, ≤3 claims, real clients unaffected, killed client still reconnects
+- [ ] `vpnctl status` shows `Uptime <daemon>s (session <n>s)` with session resetting after a kick
 
 ## Phase 7a: VPS deployment prep (no purchase) [completed]
 - [x] `server/config-vps.example.yaml` / `client/config-vps.example.yaml` (real configs git-ignored)
