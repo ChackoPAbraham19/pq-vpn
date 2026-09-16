@@ -49,7 +49,7 @@ run rsync -az --delete \
 
 echo "== 2/5 PQC OpenSSL stack (skipped if present) =="
 remote "test -x /opt/openssl-pqc/bin/openssl || bash $REMOTE_DIR/scripts/install_custom_openssl.sh"
-remote "export PATH=/opt/openssl-pqc/bin:\$PATH LD_LIBRARY_PATH=/opt/openssl-pqc/lib64; \
+remote "export PATH=/opt/openssl-pqc/bin:\$PATH LD_LIBRARY_PATH=/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib; \
 openssl list -kem-algorithms -provider oqsprovider -provider default | grep -qi mlkem768 && \
 openssl list -signature-algorithms -provider oqsprovider -provider default | grep -qi mldsa65 && \
 echo 'provider ok: ML-KEM-768 + ML-DSA-65'"

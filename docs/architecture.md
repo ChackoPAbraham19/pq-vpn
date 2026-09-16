@@ -129,7 +129,7 @@ Environment setup (`common/openssl_wrapper.py:`:
 def _make_env(mode, config_dir):
     if mode == 'pqc':
         env['PATH'] = '/opt/openssl-pqc/bin:' + env['PATH']
-        env['LD_LIBRARY_PATH'] = '/opt/openssl-pqc/lib64:' + env.get('LD_LIBRARY_PATH', '')
+        env['LD_LIBRARY_PATH'] = '/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib:' + env.get('LD_LIBRARY_PATH', '')
         env.pop('LD_PRELOAD', None)
         env['OPENSSL_CONF'] = 'pki/openssl-pqc-runtime.cnf'  # SECLEVEL=0 only
     return env

@@ -1,0 +1,9 @@
+.venv
+.git
+graphify-out
+pki/certs
+benchmark/results/*.csv
+__pycache__
+**/__pycache__
+*.pyc
+.~lock.*

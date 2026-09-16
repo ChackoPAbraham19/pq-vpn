@@ -4,7 +4,7 @@ set -euo pipefail
 # Uses default OpenSSL provider only (no PQC)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CERT_DIR="$(cd "$(dirname "$0")/certs" && pwd)/classical"
+CERT_DIR="${SCRIPT_DIR}/certs/classical"   # pki/certs is git-ignored, so never cd into it
 DAYS=3650
 SUBJ_PREFIX="/C=US/ST=CA/O=PQ-VPN"
 CA_CN="${SUBJ_PREFIX}/CN=Classical-CA"

@@ -8,7 +8,9 @@ def _make_env(mode: str, config_dir: str | None = None) -> dict:
     env = os.environ.copy()
     if mode == 'pqc':
         env['PATH'] = f'{PQC_OPENSSL_PREFIX}/bin:' + env.get('PATH', '')
-        env['LD_LIBRARY_PATH'] = f'{PQC_OPENSSL_PREFIX}/lib64:' + env.get('LD_LIBRARY_PATH', '')
+        # OpenSSL installs to lib64, liboqs (needed by oqsprovider.so) to lib.
+        env['LD_LIBRARY_PATH'] = (f'{PQC_OPENSSL_PREFIX}/lib64:{PQC_OPENSSL_PREFIX}/lib:'
+                                  + env.get('LD_LIBRARY_PATH', ''))
         env.pop('LD_PRELOAD', None)
         if config_dir:
             env['OPENSSL_CONF'] = os.path.join(config_dir, 'openssl-pqc-runtime.cnf')

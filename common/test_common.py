@@ -343,25 +343,30 @@ def test_welcome_handshake():
     assert welcome['ip'] == '10.8.0.2'
     assert welcome['port'] == 14431
 
-    def serve(port, payload):
+    def listener():
+        # Bind + listen in the caller's thread so the client can never race
+        # ahead of the bind (it did, on a slower clean-build container).
         srv = pysocket.socket(pysocket.AF_INET, pysocket.SOCK_STREAM)
         srv.setsockopt(pysocket.SOL_SOCKET, pysocket.SO_REUSEADDR, 1)
-        srv.bind(('127.0.0.1', port))
+        srv.bind(('127.0.0.1', 0))
         srv.listen(1)
+        return srv, srv.getsockname()[1]
+
+    def serve(srv, payload):
         conn, _ = srv.accept()
         conn.sendall(pack_config(payload))
         conn.close()
         srv.close()
 
-    port = _free_port()
-    t = threading.Thread(target=serve, args=(port, {'port': welcome['port']}), daemon=True)
+    srv, port = listener()
+    t = threading.Thread(target=serve, args=(srv, {'port': welcome['port']}), daemon=True)
     t.start()
     got = welcome_handshake('127.0.0.1', port, timeout=3)
     t.join(timeout=3)
     test('welcome handshake returns the assigned port', got == 14431)
 
-    port = _free_port()
-    t = threading.Thread(target=serve, args=(port, {'port': 'evil'}), daemon=True)
+    srv, port = listener()
+    t = threading.Thread(target=serve, args=(srv, {'port': 'evil'}), daemon=True)
     t.start()
     try:
         welcome_handshake('127.0.0.1', port, timeout=3)
@@ -557,6 +562,12 @@ def test_vpnctl_eacces_handling():
     import tempfile
     import cli.vpnctl as vp
     from cli.vpnctl import _read_status_sock
+
+    if os.geteuid() == 0:
+        # root bypasses socket permissions, so a 0000 socket cannot produce
+        # EACCES here (Docker clean-build runs the suites as root).
+        test('root-owned socket raises PermissionError (skipped: running as root)', True)
+        return
 
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, 'rootowned.sock')

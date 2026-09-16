@@ -86,16 +86,16 @@
 - [x] Write `docs/architecture.md` (Mermaid diagrams)
 - [x] Write `docs/benchmark-results.md` (interpreted results + graphs)
 - [x] Write `README.md` (quick start + overview)
-- [ ] Full clean-environment test (follow `docs/setup.md` from scratch)
-- [ ] Demo script runs end-to-end in <5 minutes
+- [x] Full clean-environment test — `Dockerfile` + `scripts/clean_build_check.sh` from bare ubuntu:24.04 (2026-09-16): 126/126 tests + live 2-client PQC tunnel inside a privileged container
+- [x] Demo script runs end-to-end in <5 minutes (live 3-client PQC run: 48 s)
 
 ---
 
 # Proper VPN Expansion (see docs/ROADMAP.md)
 
-## Phase 0b: Clean-build validation [pending]
-- [ ] Validate `install_custom_openssl.sh` on fresh Ubuntu 24.04 VM/container
-- [ ] Verify oqs-provider lists ML-KEM / ML-DSA
+## Phase 0b: Clean-build validation [completed]
+- [x] Validate `install_custom_openssl.sh` on fresh Ubuntu 24.04 container — found + fixed: missing LD_LIBRARY_PATH for self-check, unpinned `main` (liboqs/oqs-provider drift), liboqs in `lib/` unreachable without ldconfig, no default openssl.cnf (`install_ssldirs`), sudo-less root, PKI scripts `cd` into git-ignored dir, v1 PQC CA rejected by released 3.4.7
+- [x] Verify oqs-provider lists ML-KEM / ML-DSA — Dockerfile verify gate (`mlkem768 @ oqsprovider`, `mldsa65 @ oqsprovider`)
 - [x] `docs/DEPLOYMENT.md` skeleton (build steps + ufw/security-group checklist) — written in Phase 6
 
 ## Phase 1: Default route, NAT, DNS [in progress]

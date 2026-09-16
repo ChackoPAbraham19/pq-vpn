@@ -32,7 +32,7 @@ def _start_server(host, port, cert_path, key_path, ca_path, mode, config_dir=Non
     if mode == 'pqc':
         cmd.extend(['-provider', 'oqsprovider', '-provider', 'default'])
         env['PATH'] = f'/opt/openssl-pqc/bin:' + env.get('PATH', '')
-        env['LD_LIBRARY_PATH'] = f'/opt/openssl-pqc/lib64:' + env.get('LD_LIBRARY_PATH', '')
+        env['LD_LIBRARY_PATH'] = f'/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib:' + env.get('LD_LIBRARY_PATH', '')
         env.pop('LD_PRELOAD', None)
         if config_dir:
             env['OPENSSL_CONF'] = os.path.join(config_dir, 'openssl-pqc-runtime.cnf')
@@ -60,7 +60,7 @@ def _do_handshake(host, port, cert_path, key_path, ca_path, mode, config_dir=Non
     env = os.environ.copy()
     if mode == 'pqc':
         env['PATH'] = f'/opt/openssl-pqc/bin:' + env.get('PATH', '')
-        env['LD_LIBRARY_PATH'] = f'/opt/openssl-pqc/lib64:' + env.get('LD_LIBRARY_PATH', '')
+        env['LD_LIBRARY_PATH'] = f'/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib:' + env.get('LD_LIBRARY_PATH', '')
         env.pop('LD_PRELOAD', None)
         if config_dir:
             env['OPENSSL_CONF'] = os.path.join(config_dir, 'openssl-pqc-runtime.cnf')

@@ -100,7 +100,10 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     for t in "${PDIR}/common/test_common.py" "${PDIR}/common/test_net_config.py" \
              "${PDIR}/common/test_keepalive.py" "${PDIR}/common/test_resumption.py" \
              "${PDIR}/dashboard/test_dashboard.py"; do
-        out=$("$PY" "$t" 2>&1); rc=$?
+        # `|| rc=$?`: under set -e a failing suite must be REPORTED, not
+        # silently abort the whole dry-run (which is what a clean-build
+        # container showed when one test failed).
+        rc=0; out=$("$PY" "$t" 2>&1) || rc=$?
         last=$(echo "$out" | tail -1 | sed 's/^ *//')
         echo "    $(basename "$t"): ${last} (rc=$rc)"
         [[ $rc -ne 0 ]] && fail=1

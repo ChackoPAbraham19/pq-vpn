@@ -2,7 +2,8 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_DIR)
 
 import common.ticket_cache as tc
 
@@ -108,7 +109,7 @@ def test_openssl_resumption_real(tmp):
                 time.sleep(0.05)
         return False
 
-    cert_dir = '/home/chacko/Chacko/VPN/pki/certs/classical'
+    cert_dir = os.path.join(PROJECT_DIR, 'pki', 'certs', 'classical')
     port = 15460
     server = subprocess.Popen(
         ['openssl', 's_server', '-accept', f'127.0.0.1:{port}',
@@ -150,7 +151,7 @@ def test_openssl_resumption_real(tmp):
 
 def test_resumption_flags_wired_in_client(tmp):
     """Client run_session passes sess_in/sess_out derived from the ticket cache."""
-    src = open('/home/chacko/Chacko/VPN/client/vpn_client.py').read()
+    src = open(os.path.join(PROJECT_DIR, 'client', 'vpn_client.py')).read()
     ok = 'load_ticket' in src and 'save_ticket_file' in src and 'sess_in=' in src and 'sess_out=' in src
     test('client wired to ticket cache (sess_in/sess_out)', ok)
     # resumed must be evidence-based: drain_stderr receives ticket_offered and

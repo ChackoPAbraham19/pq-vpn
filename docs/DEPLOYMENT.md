@@ -30,12 +30,16 @@ cd /home/<user>/VPN
 sudo bash scripts/install_custom_openssl.sh
 ```
 
+Or prove the build from scratch without touching this machine:
+`bash scripts/clean_build_check.sh` (Docker, ubuntu:24.04 → same script → provider
+verify gate → PKI → offline suites). This is the Phase 0b clean-build validation.
+
 **Verify the provider works** before going further:
 
 ```bash
-export OPENSSL_CONF=$PWD/pki/openssl-pqc-runtime.cnf
-/opt/openssl-pqc/bin/openssl list -kem-algorithms    | grep -i mlkem
-/opt/openssl-pqc/bin/openssl list -signature-algorithms | grep -i mldsa
+export LD_LIBRARY_PATH=/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib
+/opt/openssl-pqc/bin/openssl list -kem-algorithms       -provider oqsprovider -provider default | grep -i mlkem768
+/opt/openssl-pqc/bin/openssl list -signature-algorithms -provider oqsprovider -provider default | grep -i mldsa65
 ```
 
 Expect `ML-KEM-768` / `X25519MLKEM768` and `ML-DSA-65` to appear.

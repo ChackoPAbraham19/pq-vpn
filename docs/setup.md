@@ -6,6 +6,28 @@ This guide reproduces the entire PQ-VPN stack from a bare Ubuntu 24.04 install t
 
 ---
 
+## Step 0 (alternative): Reproduce the whole build in Docker
+
+If you just want proof that everything below works from a bare Ubuntu 24.04:
+
+```bash
+bash scripts/clean_build_check.sh          # build image (~10 min first time) + run all suites inside it
+bash scripts/clean_build_check.sh --live   # additionally run the netns demo in a privileged container
+```
+
+Measured 2026-09-16 on a laptop, cold cache: apt 231 s, OpenSSL 3.4.7 + liboqs 0.15.0
++ oqs-provider 0.11.0 build 190 s, runtime deps + venv + PKI ~130 s. Inside the
+image: 126/126 unit tests, real handshake bench (classical ~15 ms, PQC ~80 ms median
+under Docker), and with `--live` a 2-client PQC tunnel over netns at 0 % loss and
+500–890 Mbit/s. The clean build surfaced seven portability bugs on this machine
+that the laptop had been masking (see the `feat(build)` commit message).
+
+The `Dockerfile` runs the same `scripts/install_custom_openssl.sh` a VPS would,
+then gates on `openssl list` showing `mlkem768` and `mldsa65` via oqsprovider,
+generates both PKIs, and `CMD` runs `scripts/demo.sh --dry-run --mode pqc`. The
+script falls back to `docker build --network=host` when bridge-mode containers
+have no egress (typical with ufw's default FORWARD policy).
+
 ## Step 1: System Dependencies
 
 ```bash
@@ -43,11 +65,11 @@ This performs 3 steps:
 **Verify**:
 
 ```bash
-LD_LIBRARY_PATH=/opt/openssl-pqc/lib64 /opt/openssl-pqc/bin/openssl version
+LD_LIBRARY_PATH=/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib /opt/openssl-pqc/bin/openssl version
 # → OpenSSL 3.4.x (Library: OpenSSL 3.4.x)
-LD_LIBRARY_PATH=/opt/openssl-pqc/lib64 /opt/openssl-pqc/bin/openssl list -kem-algorithms | grep -i mlkem
+LD_LIBRARY_PATH=/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib /opt/openssl-pqc/bin/openssl list -kem-algorithms | grep -i mlkem
 # → X25519MLKEM768, mlkem512, mlkem768, mlkem1024
-LD_LIBRARY_PATH=/opt/openssl-pqc/lib64 /opt/openssl-pqc/bin/openssl list -signature-algorithms | grep -i mldsa
+LD_LIBRARY_PATH=/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib /opt/openssl-pqc/bin/openssl list -signature-algorithms | grep -i mldsa
 # → mldsa44, mldsa65, mldsa87
 ```
 
@@ -69,7 +91,7 @@ bash pki/gen_pqc_ca.sh          # → pki/certs/pqc/
 openssl verify -CAfile pki/certs/classical/ca.crt pki/certs/classical/server.crt
 # → OK
 
-LD_LIBRARY_PATH=/opt/openssl-pqc/lib64 OPENSSL_CONF=pki/openssl-pqc.cnf \
+LD_LIBRARY_PATH=/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib OPENSSL_CONF=pki/openssl-pqc.cnf \
   /opt/openssl-pqc/bin/openssl verify \
   -CAfile pki/certs/pqc/ca.crt pki/certs/pqc/server.crt
 # → OK
