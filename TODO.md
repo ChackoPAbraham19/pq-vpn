@@ -130,8 +130,9 @@
 - [x] Fixed 5 s startup wait removed on both sides (config-push doubles as handshake-complete signal); client acks with an immediate keepalive
 - [x] `handshake_timeout` (10 s) reaps welcome slot claims that never finish mTLS (bounds welcome-port DoS)
 - [x] Addresses derived from `tun_net`; demux uses a packed-address dict instead of a linear scan
-- [x] `common/test_common.py` 47/47 (port recycling, tun_net, -naccept, stale reap, validate_config, real config-push over TLS)
-- [ ] netns run: reconnect lands on port ≤ 14433; bare `nc` to 14430 reaped in ~10 s; no 5 s first-ping stall
+- [x] `common/test_common.py` 52/52 (port recycling, welcome-send-failure slot release, tun_net, -naccept, stale reap, validate_config, real config-push over TLS)
+- [x] netns run (2026-09-16, live, PQC, 3 clients): reconnect landed on 10.8.0.4 / port 14433 as client #4 with s_server count still 3; restarted client `connected` at 3 s uptime (old code: still inside its 5 s wait); dashboard 401 → kick ok with token
+- [ ] netns run: bare `nc` to 14430 with a FREE slot reaped in ~10 s (first attempt hit a full pool → rejected before claiming; also needed `PYTHONUNBUFFERED=1` for live logs)
 
 ## Phase 2: Keepalive + reconnect [in progress]
 - [x] 15s keepalive control frame; server idle teardown 3×15s

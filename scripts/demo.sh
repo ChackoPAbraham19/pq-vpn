@@ -151,6 +151,9 @@ cd "$PDIR"
 # probing DNS on every client is guaranteed noise. VPS/production runs leave
 # this unset and keep full DNS management.
 export PQVPN_SKIP_DNS=1
+# Daemon stdout is redirected to /tmp/pqvpn-demo-*.log; without this Python
+# block-buffers it and the logs stay empty until the daemon exits.
+export PYTHONUNBUFFERED=1
 
 PING_FAILS=0
 

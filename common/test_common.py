@@ -809,6 +809,64 @@ def test_config_push_over_tls_real():
                 p.kill()
 
 
+def test_welcome_send_failure_releases_slot():
+    """handle_client must free the slot (and kill its s_server) when the
+    welcome peer is already gone, instead of leaking it via an escaped
+    exception."""
+    import socket as pysocket
+    from server.session_manager import SessionManager
+    from server import vpn_server
+
+    port_base = _free_port()
+    mgr = SessionManager({'gateway': '10.8.0.1', 'dns': '10.8.0.1',
+                          'tun_net': '10.8.0.0/24', 'max_clients': 3,
+                          'data_port_base': port_base})
+    config = {'host': '127.0.0.1'}
+
+    class Status:
+        tls_pid = 0
+        bytes_in = 0
+        bytes_out = 0
+
+    class DeadConn:
+        """Looks like an accepted socket whose peer has reset."""
+        closed = 0
+
+        def sendall(self, _data):
+            raise ConnectionResetError(104, 'Connection reset by peer')
+
+        def close(self):
+            self.closed += 1
+
+    conn = DeadConn()
+    t = threading.Thread(
+        target=vpn_server.handle_client,
+        args=(conn, mgr, config, Status(), CERT_DIR, 'classical', 'X25519MLKEM768', -1),
+        daemon=True)
+    t.start()
+    t.join(timeout=8)
+    test('handle_client returns (no escaped exception)', not t.is_alive())
+    test('slot released after failed welcome send', mgr.snapshot() == [])
+    # FIFO release: the freed slot sits behind the two untouched ones, so
+    # three welcomes must succeed and together cover exactly the 3 ports.
+    ports = {w['port'] for w in (mgr.welcome_payload() for _ in range(3)) if w}
+    test('freed slot is reusable (3 welcomes cover all 3 ports)',
+         ports == {port_base, port_base + 1, port_base + 2})
+    test('welcome socket closed', conn.closed >= 1)
+    # The per-client s_server bound to port_base must be gone too.
+    probe = pysocket.socket(pysocket.AF_INET, pysocket.SOCK_STREAM)
+    probe.settimeout(0.5)
+    try:
+        probe.connect(('127.0.0.1', port_base))
+        still_listening = True
+    except OSError:
+        still_listening = False
+    finally:
+        probe.close()
+    test('orphaned s_server terminated', not still_listening)
+
+
+
 if __name__ == '__main__':
     print('=== PQ-VPN Common Module Tests ===')
     print()
@@ -837,6 +895,7 @@ if __name__ == '__main__':
     test_stale_handshake_reaped()
     test_validate_config_rejects_garbage()
     test_config_push_over_tls_real()
+    test_welcome_send_failure_releases_slot()
     print()
     total = PASS + FAIL
     print(f'{PASS}/{total} passed' + (' ✅' if FAIL == 0 else ' ❌'))

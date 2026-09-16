@@ -193,6 +193,13 @@ def handle_client(conn, manager, config, status, cert_dir, mode, groups, tun_fd)
 
     try:
         conn.sendall(pack_config({'port': session.data_port}))
+    except OSError as e:
+        # Peer vanished mid-welcome (port scan, reset). Without this the
+        # exception escaped the thread and the slot + its s_server leaked.
+        print(f'[server] client #{client_id} welcome send failed ({e}), releasing slot')
+        conn.close()
+        manager.remove(client_id, session.host_id)
+        return
     finally:
         conn.close()
 
