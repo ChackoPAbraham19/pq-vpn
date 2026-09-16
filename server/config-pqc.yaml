@@ -15,3 +15,4 @@ persist_sysctl: false
 dnsmasq: true
 dns_upstream: 1.1.1.1
 keepalive_interval: 15
+handshake_timeout: 10   # reap slot claims that never complete mTLS (s)

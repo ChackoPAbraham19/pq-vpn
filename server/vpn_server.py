@@ -61,6 +61,11 @@ def relay_tls_to_tun(tls_stdout_fd, tun_fd, session, status):
             chunk = os.read(tls_stdout_fd, 4096)
             if not chunk:
                 break
+            if not session.connected:
+                # First application data = the client passed mTLS. Until this
+                # point the session was only a slot claim (see stale_handshakes).
+                session.mark_connected()
+                print(f'[server] client #{session.client_id} relay active ({session.ip})')
             buf += chunk
             while len(buf) >= HEADER_LEN:
                 ftype = buf[0]
@@ -103,15 +108,8 @@ def relay_tun_to_tls_loop(tun_fd, manager, status):
             if not raw:
                 break
             dst = ipv4_dst(raw)
-            session = None
-            if dst is not None:
-                target = f'10.8.0.{dst[-1]}'
-                with manager._lock:
-                    for s in manager.sessions.values():
-                        if s.ip == target:
-                            session = s
-                            break
-            if session is None or session.stop.is_set():
+            session = manager.lookup(dst) if dst is not None else None
+            if session is None or session.stop.is_set() or session.tls_proc is None:
                 continue
             try:
                 frame = pack_frame(raw)
@@ -131,14 +129,22 @@ def relay_tun_to_tls_loop(tun_fd, manager, status):
                 break
 
 
-def idle_monitor(manager, idle_timeout, status, stop):
-    """Teardown sessions that have been idle (no traffic/keepalive) too long."""
+def idle_monitor(manager, idle_timeout, handshake_timeout, status, stop):
+    """Teardown sessions that have been idle (no traffic/keepalive) too long,
+    and slot claims whose client never completed mTLS within handshake_timeout.
+
+    The second rule bounds what an unauthenticated welcome connection costs:
+    a slot for handshake_timeout seconds, not the full idle window.
+    """
     while not stop.is_set():
-        for session in manager.idle_sessions(idle_timeout):
+        victims = [(s, 'idle', s.idle_seconds()) for s in manager.idle_sessions(idle_timeout)]
+        victims += [(s, 'no mTLS handshake', s.age_seconds())
+                    for s in manager.stale_handshakes(handshake_timeout)]
+        for session, why, secs in victims:
             if session.stop.is_set():
                 continue  # already tearing down / waiting for removal
-            print(f'[server] client #{session.client_id} idle '
-                  f'({session.idle_seconds():.0f}s), tearing down')
+            print(f'[server] client #{session.client_id} {why} '
+                  f'({secs:.0f}s), tearing down')
             session.stop.set()
             if session.tls_proc is not None:
                 session.tls_proc.terminate()
@@ -159,8 +165,8 @@ def handle_client(conn, manager, config, status, cert_dir, mode, groups, tun_fd)
     ca_path = os.path.join(cert_dir, 'ca.crt')
     print(f'[server] client #{client_id} -> tun {session.ip}, data port {session.data_port}')
 
-    # Start the per-client TLS listener BEFORE pushing config, so the client's
-    # data connection is never refused.
+    # Start the per-client TLS listener BEFORE telling the client its port, so
+    # the data connection is never refused.
     session.tls_proc = start_tls_server(
         host=config.get('host', '0.0.0.0'),
         port=session.data_port,
@@ -172,36 +178,38 @@ def handle_client(conn, manager, config, status, cert_dir, mode, groups, tun_fd)
     )
     status.tls_pid = session.tls_proc.pid
 
+    # The full config (ip/gateway/dns) goes INSIDE the TLS channel: s_server
+    # only reads stdin once a connection is up, so this frame sits in the pipe
+    # and becomes the first application-data record after mTLS succeeds. The
+    # plaintext welcome carries nothing a MITM could usefully tamper with.
     try:
-        conn.sendall(pack_config(welcome))
+        session.tls_proc.stdin.write(pack_config(welcome))
+        session.tls_proc.stdin.flush()
+    except (BrokenPipeError, OSError) as e:
+        print(f'[server] client #{client_id} TLS stdin unavailable ({e})')
+        conn.close()
+        manager.remove(client_id, session.host_id)
+        return
+
+    try:
+        conn.sendall(pack_config({'port': session.data_port}))
     finally:
         conn.close()
 
     err_thread = threading.Thread(
         target=drain_stderr, args=(session.tls_proc.stderr, session.stop), daemon=True)
-
-    # Wait up to 5s for this client's TLS data connection to come up.
-    deadline = time.time() + 5.0
-    while time.time() < deadline:
-        if session.stop.is_set():
-            break
-        if session.tls_proc.poll() is not None:
-            err = session.tls_proc.stderr.read().decode(errors='replace').strip()
-            print(f'[server] client #{client_id} TLS exited: {err}')
-            manager.remove(client_id, session.host_id)
-            return
-        time.sleep(0.1)
-
     tls_stdout_fd = session.tls_proc.stdout.fileno()
     in_thread = threading.Thread(
         target=relay_tls_to_tun, args=(tls_stdout_fd, tun_fd, session, status), daemon=True)
-    print(f'[server] client #{client_id} relay active ({session.ip})')
-    in_thread.start()
-
+    # No fixed startup wait: the relay starts now and an s_server that dies
+    # early (or a client that never connects) surfaces as EOF / stale reap.
     err_thread.start()
+    in_thread.start()
     in_thread.join()
     session.stop.set()
-    session.tls_proc.terminate()
+    rc = session.tls_proc.poll()
+    if rc not in (None, 0) and not session.connected:
+        print(f'[server] client #{client_id} TLS exited early (rc={rc})')
     print(f'[server] client #{client_id} disconnected')
     manager.remove(client_id, session.host_id)
 
@@ -210,6 +218,7 @@ def main():
     ipc = None
     dnsmasq_proc = None
     config = None
+    manager = None
     try:
         args = parse_args()
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.basename(args.config))
@@ -285,7 +294,9 @@ def main():
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((config.get('host', '0.0.0.0'), welcome_port))
         listener.listen(4)
-        print(f'[server] welcome listener on {config.get("host", "0.0.0.0")}:{welcome_port}')
+        lo, hi = manager.port_range
+        print(f'[server] welcome listener on {config.get("host", "0.0.0.0")}:{welcome_port}; '
+              f'data ports {lo}-{hi} ({manager.max_clients} slots)')
 
         status.state = 'connected'
 
@@ -308,8 +319,10 @@ def main():
         refresh_thread.start()
 
         idle_timeout = config.get('keepalive_interval', 15) * 3
+        handshake_timeout = float(config.get('handshake_timeout', 10))
         idle_thread = threading.Thread(
-            target=idle_monitor, args=(manager, idle_timeout, status, stop), daemon=True)
+            target=idle_monitor,
+            args=(manager, idle_timeout, handshake_timeout, status, stop), daemon=True)
         idle_thread.start()
 
         listener.settimeout(0.5)
@@ -336,13 +349,14 @@ def main():
     finally:
         # Terminate every per-client s_server child; otherwise they outlive
         # the daemon until something else reaps them.
-        try:
+        if manager is not None:
             for session in list(manager.sessions.values()):
                 session.stop.set()
                 if session.tls_proc is not None:
-                    session.tls_proc.terminate()
-        except Exception:
-            pass
+                    try:
+                        session.tls_proc.terminate()
+                    except ProcessLookupError:
+                        pass
         stop_dnsmasq(dnsmasq_proc)
         if config is not None:
             try:

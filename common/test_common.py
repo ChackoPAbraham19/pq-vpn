@@ -196,12 +196,15 @@ def _free_port():
 
 
 def test_phase4_welcome_to_relay():
-    """End-to-end: welcome handshake -> assigned data port -> framed TLS relay."""
+    """End-to-end with the real daemon helpers: plaintext welcome hands out a
+    port only; the full config-push arrives as the first frame INSIDE the mTLS
+    channel; the relay then carries framed data with the leftover buffer."""
     import socket as pysocket
     import os as osmod
     import fcntl
-    from common.framing import pack_config, unpack_config, pack_frame
+    from common.framing import pack_config, pack_frame
     from server.session_manager import SessionManager
+    from client.vpn_client import welcome_handshake, read_pushed_config
 
     port_base = _free_port()
     mgr = SessionManager({'gateway': '10.8.0.1', 'dns': '10.8.0.1',
@@ -227,18 +230,23 @@ def test_phase4_welcome_to_relay():
     def server_side():
         conn, _ = listener.accept()
         welcome = mgr.welcome_payload()
+        results['welcome'] = welcome
         sess = mgr.get(welcome['id'])
-        from common.openssl_wrapper import start_tls_server
         sess.tls_proc = start_tls_server(
             '127.0.0.1', welcome['port'], SERVER_CERT, SERVER_KEY, CA, mode='classical')
         server_procs.append(sess.tls_proc)
-        conn.sendall(pack_config(welcome))
+        # Same order as vpn_server.handle_client: config into the TLS pipe
+        # first, then the port-only welcome.
+        sess.tls_proc.stdin.write(pack_config(welcome))
+        sess.tls_proc.stdin.flush()
+        conn.sendall(pack_config({'port': welcome['port']}))
         conn.close()
         from server.vpn_server import relay_tls_to_tun
         t = threading.Thread(
             target=relay_tls_to_tun, args=(sess.tls_proc.stdout.fileno(), tun_fd, sess, status), daemon=True)
         t.start()
         time.sleep(2)
+        results['server_connected'] = sess.connected
         fl = fcntl.fcntl(tun_r, fcntl.F_GETFL)
         fcntl.fcntl(tun_r, fcntl.F_SETFL, fl | osmod.O_NONBLOCK)
         data = b''
@@ -253,41 +261,26 @@ def test_phase4_welcome_to_relay():
         results['server_recv'] = data
         sess.stop.set()
         sess.tls_proc.terminate()
-        conn.close()
 
     def client_side():
-        s = pysocket.create_connection(('127.0.0.1', welcome_port), timeout=3)
-        buf = b''
-        cfg = None
-        while True:
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
-            cfg, _ = unpack_config(buf)
-            if cfg:
-                break
-        s.close()
-        results['client_cfg'] = cfg
+        port = welcome_handshake('127.0.0.1', welcome_port, timeout=3)
+        results['client_port'] = port
         proc = None
         for _ in range(5):
             proc = start_tls_client(
-                '127.0.0.1', cfg['port'], CLIENT_CERT, CLIENT_KEY, CA, mode='classical')
-            deadline = time.time() + 1.0
-            ok_started = True
-            while time.time() < deadline:
-                if proc.poll() is not None:
-                    err = proc.stderr.read().decode(errors='replace').strip()
-                    if 'Connection refused' in err:
-                        ok_started = False
-                        break
-                    raise RuntimeError(f's_client exited: {err}')
-                time.sleep(0.05)
-            if ok_started:
+                '127.0.0.1', port, CLIENT_CERT, CLIENT_KEY, CA, mode='classical')
+            try:
+                cfg, rest = read_pushed_config(proc.stdout.fileno(), timeout=3.0)
+                results['client_cfg'] = cfg
+                results['client_rest'] = rest
                 break
-            proc.terminate()
-            time.sleep(0.2)
-        time.sleep(0.3)
+            except RuntimeError:
+                proc.terminate()
+                proc.wait()
+                err = proc.stderr.read().decode(errors='replace')
+                if 'Connection refused' not in err:
+                    raise
+                time.sleep(0.2)
         msg = b'hello-over-framed-tls'
         try:
             proc.stdin.write(pack_frame(msg))
@@ -311,9 +304,15 @@ def test_phase4_welcome_to_relay():
         except subprocess.TimeoutExpired:
             p.kill()
 
+    welcome = results.get('welcome') or {}
     cfg = results.get('client_cfg') or {}
-    ok = cfg.get('ip') == '10.8.0.2' and results.get('server_recv') == b'hello-over-framed-tls'
-    test('Phase 4: welcome handshake -> assigned port -> framed relay', ok)
+    test('welcome wire carries the port only',
+         results.get('client_port') == welcome.get('port'))
+    test('config-push arrives inside TLS with the assigned IP',
+         cfg.get('ip') == '10.8.0.2' and cfg.get('gateway') == '10.8.0.1'
+         and results.get('client_rest') == b'')
+    ok = results.get('server_recv') == b'hello-over-framed-tls' and results.get('server_connected') is True
+    test('Phase 4: welcome -> TLS config-push -> framed relay (session marked connected)', ok)
     if not ok:
         print(f'    cfg: {cfg!r}')
         print(f'    server_recv: {results.get("server_recv")!r}')
@@ -330,11 +329,13 @@ def test_tun_import():
 
 
 def test_welcome_handshake():
-    """Server assigns IP+port via config-push control frame; client parses it."""
+    """Plaintext welcome round-trip returns only the data port; the client
+    helper rejects a welcome that tries to push anything malformed."""
     import socket as pysocket
     import threading
-    from common.framing import pack_config, unpack_config
+    from common.framing import pack_config
     from server.session_manager import SessionManager
+    from client.vpn_client import welcome_handshake
 
     manager = SessionManager({'gateway': '10.8.0.1'})
     welcome = manager.welcome_payload()
@@ -342,45 +343,33 @@ def test_welcome_handshake():
     assert welcome['ip'] == '10.8.0.2'
     assert welcome['port'] == 14431
 
-    def serve(port):
+    def serve(port, payload):
         srv = pysocket.socket(pysocket.AF_INET, pysocket.SOCK_STREAM)
         srv.setsockopt(pysocket.SOL_SOCKET, pysocket.SO_REUSEADDR, 1)
         srv.bind(('127.0.0.1', port))
         srv.listen(1)
         conn, _ = srv.accept()
-        conn.sendall(pack_config(welcome))
+        conn.sendall(pack_config(payload))
         conn.close()
         srv.close()
 
-    port = 15430
-    t = threading.Thread(target=serve, args=(port,), daemon=True)
+    port = _free_port()
+    t = threading.Thread(target=serve, args=(port, {'port': welcome['port']}), daemon=True)
     t.start()
-
-    client_cfg = _welcome_handshake_client('127.0.0.1', port)
+    got = welcome_handshake('127.0.0.1', port, timeout=3)
     t.join(timeout=3)
-    ok = client_cfg == welcome
-    test('welcome config-push handshake round-trip', ok)
-    if not ok:
-        print(f'    expected {welcome!r}')
-        print(f'    received {client_cfg!r}')
+    test('welcome handshake returns the assigned port', got == 14431)
 
-
-def _welcome_handshake_client(host, port):
-    import socket as pysocket
-    from common.framing import unpack_config
-    s = pysocket.create_connection((host, port), timeout=3)
+    port = _free_port()
+    t = threading.Thread(target=serve, args=(port, {'port': 'evil'}), daemon=True)
+    t.start()
     try:
-        buf = b''
-        while True:
-            chunk = s.recv(4096)
-            if not chunk:
-                raise RuntimeError('connection closed before config')
-            buf += chunk
-            cfg, _ = unpack_config(buf)
-            if cfg is not None:
-                return cfg
-    finally:
-        s.close()
+        welcome_handshake('127.0.0.1', port, timeout=3)
+        bad = False
+    except RuntimeError:
+        bad = True
+    t.join(timeout=3)
+    test('welcome handshake rejects a non-integer port', bad)
 
 
 def test_session_manager_pool():
@@ -396,6 +385,14 @@ def test_session_manager_pool():
         and len(manager.snapshot()) == 3
     )
     test('session manager IP pool (3 clients max)', ok)
+    test('ports are slot-bound: base, base+1, base+2',
+         (a['port'], b['port'], c['port']) == (14431, 14432, 14433)
+         and manager.port_range == (14431, 14433))
+    # Reconnect: the freed slot's port is reused, never base+3.
+    manager.remove(a['id'], manager.get(a['id']).host_id)
+    e = manager.welcome_payload()
+    test('freed slot is recycled within the port range',
+         e is not None and e['port'] == 14431 and e['ip'] == '10.8.0.2' and e['id'] == 4)
 
 
 def test_imports():
@@ -678,6 +675,140 @@ def test_kill_by_role_eacces_honest():
         os.kill = orig_kill
 
 
+def test_port_recycling_across_reconnects():
+    """Three clients reconnecting many times never leave the 3-port range."""
+    from server.session_manager import SessionManager
+    mgr = SessionManager({'gateway': '10.8.0.1', 'max_clients': 3,
+                          'data_port_base': 20000})
+    seen_ports = set()
+    seen_ips = set()
+    for _round in range(5):
+        batch = [mgr.welcome_payload() for _ in range(3)]
+        assert all(batch), 'pool should never be exhausted between rounds'
+        for w in batch:
+            seen_ports.add(w['port'])
+            seen_ips.add(w['ip'])
+        for w in batch:
+            mgr.remove(w['id'], mgr.get(w['id']).host_id)
+    test('15 sessions over 3 slots use exactly 3 ports',
+         seen_ports == {20000, 20001, 20002})
+    test('and exactly 3 tunnel IPs', seen_ips == {'10.8.0.2', '10.8.0.3', '10.8.0.4'})
+
+
+def test_pool_honours_tun_net():
+    """Addresses derive from tun_net; nothing hardcodes 10.8.0."""
+    from server.session_manager import SessionManager, ipv4_dst
+    mgr = SessionManager({'gateway': '10.99.5.1', 'tun_net': '10.99.5.0/24',
+                          'max_clients': 2})
+    a = mgr.welcome_payload()
+    packet = bytes([0x45]) + bytes(15) + bytes([10, 99, 5, 2]) + bytes(4)
+    test('pool allocates from tun_net', a['ip'] == '10.99.5.2'
+         and a['subnet'] == '10.99.5.1/24')
+    test('demux lookup by packed dst finds the session',
+         mgr.lookup(ipv4_dst(packet)) is mgr.get(a['id']))
+    mgr.remove(a['id'], mgr.get(a['id']).host_id)
+    test('lookup misses after removal', mgr.lookup(ipv4_dst(packet)) is None)
+
+
+def test_naccept_flag():
+    """start_tls_server passes -naccept 1 by default, omits it for None."""
+    import common.openssl_wrapper as ow
+    calls = []
+
+    class FakeProc:
+        pid = 0
+
+    orig = ow.subprocess.Popen
+    ow.subprocess.Popen = lambda cmd, **kw: (calls.append(cmd), FakeProc())[1]
+    try:
+        ow.start_tls_server('127.0.0.1', 1, 'c', 'k', 'ca')
+        ow.start_tls_server('127.0.0.1', 1, 'c', 'k', 'ca', naccept=None)
+    finally:
+        ow.subprocess.Popen = orig
+    default_cmd, long_cmd = calls
+    test('-naccept 1 present by default',
+         '-naccept' in default_cmd and default_cmd[default_cmd.index('-naccept') + 1] == '1')
+    test('-naccept omitted for naccept=None', '-naccept' not in long_cmd)
+
+
+def test_stale_handshake_reaped():
+    """A slot claim that never completes mTLS shows up in stale_handshakes."""
+    from server.session_manager import SessionManager
+    mgr = SessionManager({'gateway': '10.8.0.1', 'max_clients': 2})
+    a = mgr.welcome_payload()
+    b = mgr.welcome_payload()
+    mgr.get(b['id']).mark_connected()
+    time.sleep(0.2)
+    stale = [s.client_id for s in mgr.stale_handshakes(0.1)]
+    test('unconnected slot claim is stale after timeout', stale == [a['id']])
+    test('connected session is never stale', b['id'] not in stale)
+
+
+def test_validate_config_rejects_garbage():
+    from common.framing import validate_config
+    good = {'id': 1, 'ip': '10.8.0.2', 'gateway': '10.8.0.1', 'dns': '10.8.0.1',
+            'port': 14431, 'subnet': '10.8.0.1/24'}
+    test('validate_config accepts a real push', validate_config(dict(good)) == good)
+    bad_cases = [
+        ('missing key', {k: v for k, v in good.items() if k != 'dns'}),
+        ('bad ip', {**good, 'ip': 'not-an-ip'}),
+        ('bad dns', {**good, 'dns': '10.8.0.1,evil.example'}),
+        ('bad port', {**good, 'port': '14431'}),
+        ('bad subnet', {**good, 'subnet': '10.8.0.1/99'}),
+        ('not a dict', ['ip']),
+    ]
+    rejected = []
+    for name, cfg in bad_cases:
+        try:
+            validate_config(cfg)
+        except ValueError:
+            rejected.append(name)
+    test('validate_config rejects malformed pushes',
+         rejected == [n for n, _ in bad_cases])
+
+
+def test_config_push_over_tls_real():
+    """Real s_server/s_client: a frame written to s_server stdin BEFORE any
+    client connects is delivered as the first application record after mTLS,
+    and s_server (-naccept 1) exits once that client hangs up."""
+    from common.framing import pack_config
+    from client.vpn_client import read_pushed_config
+
+    port = _free_port()
+    cfg = {'id': 7, 'ip': '10.8.0.3', 'gateway': '10.8.0.1', 'dns': '10.8.0.1',
+           'port': port, 'subnet': '10.8.0.1/24'}
+    server = start_tls_server('127.0.0.1', port, SERVER_CERT, SERVER_KEY, CA, mode='classical')
+    server.stdin.write(pack_config(cfg))
+    server.stdin.flush()
+    got = None
+    client = None
+    try:
+        for _ in range(10):
+            client = start_tls_client('127.0.0.1', port, CLIENT_CERT, CLIENT_KEY, CA, mode='classical')
+            try:
+                got, _rest = read_pushed_config(client.stdout.fileno(), timeout=3.0)
+                break
+            except RuntimeError:
+                client.terminate()
+                client.wait()
+                if 'Connection refused' not in client.stderr.read().decode(errors='replace'):
+                    raise
+                time.sleep(0.2)
+        test('config-push delivered as first frame over real TLS', got == cfg)
+        client.terminate()
+        client.wait()
+        try:
+            server.wait(timeout=3)
+            exited = True
+        except subprocess.TimeoutExpired:
+            exited = False
+        test('s_server exits after its single client disconnects (-naccept 1)', exited)
+    finally:
+        for p in (client, server):
+            if p is not None and p.poll() is None:
+                p.kill()
+
+
 if __name__ == '__main__':
     print('=== PQ-VPN Common Module Tests ===')
     print()
@@ -700,6 +831,12 @@ if __name__ == '__main__':
     test_pool_pressure_reclaim()
     test_ipc_shutdown_command()
     test_kill_by_role_eacces_honest()
+    test_port_recycling_across_reconnects()
+    test_pool_honours_tun_net()
+    test_naccept_flag()
+    test_stale_handshake_reaped()
+    test_validate_config_rejects_garbage()
+    test_config_push_over_tls_real()
     print()
     total = PASS + FAIL
     print(f'{PASS}/{total} passed' + (' ✅' if FAIL == 0 else ' ❌'))

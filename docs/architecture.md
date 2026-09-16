@@ -51,15 +51,31 @@ flowchart TB
     DB --"poll /tmp/pqvpn-*.sock\nassigns IP/port, idle teardown"--> S_PROXY
 
     C_TLS --"TLS 1.3 (classical / X25519MLKEM768)\nframed tunnel data + keepalives"--> S_TLS1
-    C_TLS --"welcome config-push {ip,port,gw,dns}"--> S_WELCOME
+    C_TLS --"welcome (plaintext): {port} only"--> S_WELCOME
+    S_TLS1 --"first TLS frame: config-push {ip,gw,dns}"--> C_TLS
     HOSTROUTE <--> S_VETH
 ```
 
-The client opens the welcome channel first (thin TCP), receives a config-push
-control frame assigning its tunnel IP, gateway, DNS, and a dedicated data port;
-it then opens the real TLS data connection to that port. The server runs one
-`openssl s_server` per client and a shared TUN reader demuxes inbound tunnel
-packets to the right client by destination IP.
+The client opens the welcome channel first (thin plaintext TCP) and receives
+**only** a dedicated data port. It then opens the real mTLS data connection to
+that port; the server has already written the full config-push (tunnel IP,
+gateway, DNS, subnet) into that `s_server`'s stdin, so it is delivered as the
+first application-data frame **after** mutual certificate verification. Nothing
+a MITM on the welcome channel could alter is ever applied to the client's
+routing or DNS. The server runs one `openssl s_server -naccept 1` per client
+and a shared TUN reader demuxes inbound tunnel packets to the right client by
+destination IP (dict lookup on the packed address).
+
+**Slots and ports.** The IP pool is capped at `max_clients` addresses and each
+address is a fixed slot: slot *n* always listens on `data_port_base + n`
+(default 14431–14433). Client ids keep counting up for logs and the dashboard,
+but a reconnecting client is reassigned inside that range, so the firewall
+rule never has to change. A slot is released only after its `s_server` has
+actually exited (`SessionManager.remove` drains the process first), and
+`-naccept 1` makes that happen the moment the client hangs up instead of at
+the 45 s idle timer. A slot claimed via the welcome port that never completes
+mTLS is reaped after `handshake_timeout` (10 s) — the bound on what an
+unauthenticated welcome connection can cost.
 
 ## Data Plane
 
@@ -210,6 +226,12 @@ The server uses a 100ms `select()` wait so bare status polls never block on a fu
 ### Limitations
 
 - No mid-stream key rotation (s_server has no renegotiation); rekey = reconnect (ticket resumption keeps it cheap)
+- The welcome port is unauthenticated: anyone can claim a slot for up to
+  `handshake_timeout` seconds and, in that window, race the legitimate client
+  to its data port (a foreign TCP connect consumes the `-naccept 1` budget and
+  the client falls back to a fresh welcome). Rate limiting per source address
+  is Future Work; mTLS still guarantees no tunnel is ever established with an
+  unauthenticated peer.
 - **Session resumption is connection-lifetime only**: each client session gets a
   fresh `s_server` process, which generates fresh TLS ticket-encryption keys.
   A cached ticket from a previous server lifetime therefore never resumes
@@ -219,9 +241,8 @@ The server uses a 100ms `select()` wait so bare status polls never block on a fu
   ticket-key broker (Future Work).
 - Python GIL-bound CPU limit, ~700 Mbps TCP/UDP throughput measured (IP limits, not crypto)
 - NAT/dnsmasq/default-route plumbing is config-driven (`server/net_config.py`,
-  `client/net_config.py`) and validated via `--dry-run` unit tests; the live
-  netns run is pending
-- Dashboard live-browser verification pending (needs sudo for the netns test harness)
+  `client/net_config.py`), validated via `--dry-run` unit tests and the live
+  netns demo
 
 ## Session Resumption
 

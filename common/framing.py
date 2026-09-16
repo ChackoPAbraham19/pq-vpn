@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import struct
 
@@ -7,6 +8,36 @@ TYPE_LEN = 1
 HEADER_LEN = TYPE_LEN + 4  # [type:1][length:4][payload]
 
 KEEPALIVE = b'KA'  # control-frame payload for keepalives
+
+# Keys the server pushes over TLS as the first frame of a session. The client
+# applies ip/gateway/dns system-wide, so it validates the shape before acting.
+CONFIG_KEYS = ('id', 'ip', 'gateway', 'dns', 'port', 'subnet')
+
+
+def validate_config(cfg) -> dict:
+    """Return cfg if it is a well-formed config-push, else raise ValueError."""
+    if not isinstance(cfg, dict):
+        raise ValueError('config-push is not an object')
+    missing = [k for k in CONFIG_KEYS if k not in cfg]
+    if missing:
+        raise ValueError(f'config-push missing keys: {missing}')
+    for key in ('ip', 'gateway'):
+        try:
+            ipaddress.IPv4Address(cfg[key])
+        except (ipaddress.AddressValueError, TypeError) as e:
+            raise ValueError(f'config-push {key} invalid: {e}')
+    for dns in str(cfg['dns']).split(','):
+        try:
+            ipaddress.IPv4Address(dns.strip())
+        except ipaddress.AddressValueError as e:
+            raise ValueError(f'config-push dns invalid: {e}')
+    if not isinstance(cfg['port'], int) or not (0 < cfg['port'] < 65536):
+        raise ValueError(f'config-push port invalid: {cfg["port"]!r}')
+    try:
+        ipaddress.ip_network(cfg['subnet'], strict=False)
+    except ValueError as e:
+        raise ValueError(f'config-push subnet invalid: {e}')
+    return cfg
 
 def pack_frame(data: bytes, ftype: int = TYPE_DATA) -> bytes:
     return struct.pack('!BI', ftype, len(data)) + data

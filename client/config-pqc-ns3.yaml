@@ -11,3 +11,4 @@ backoff_min: 1.0
 backoff_max: 30.0
 resume_cache: true
 instance: ns3
+handshake_timeout: 10

@@ -28,7 +28,15 @@ def start_tls_server(
     mode: str = 'classical',
     groups: str = 'X25519MLKEM768',
     config_dir: str | None = None,
+    naccept: int | None = 1,
 ) -> subprocess.Popen:
+    """Spawn `openssl s_server`.
+
+    naccept=1 (default) makes the process exit after its single client
+    disconnects, so the relay sees EOF immediately and the slot/port is freed
+    without waiting for the idle timer. Pass None for a long-lived listener
+    (benchmarks prime tickets against one).
+    """
     cmd = ['openssl', 's_server']
     if mode == 'pqc':
         cmd.extend(['-provider', 'oqsprovider', '-provider', 'default'])
@@ -40,6 +48,8 @@ def start_tls_server(
         '-Verify', '1',
         '-quiet',
     ])
+    if naccept is not None:
+        cmd.extend(['-naccept', str(naccept)])
     if mode == 'pqc':
         cmd.extend(['-groups', groups])
 

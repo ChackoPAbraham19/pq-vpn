@@ -10,3 +10,4 @@ keepalive_interval: 15
 backoff_min: 1.0
 backoff_max: 30.0
 resume_cache: true
+handshake_timeout: 10

@@ -46,12 +46,12 @@
 - [x] End-to-end test: ping through tunnel
 - [x] End-to-end test: file transfer with sha256 verification
 
-## Stage 7: PQC Swap — Same Daemon, PQC Crypto [pending]
-- [ ] Set `OPENSSL_CONF=pki/openssl-pqc.cnf` in openssl_wrapper for PQC mode
-- [ ] Add `-groups` flag based on config (e.g. X25519MLKEM768)
-- [ ] Update config yamls for PQC cert paths + mode flag
-- [ ] Repeat Stage 6 verification suite (ping + file transfer)
-- [ ] Confirm via tcpdump that handshake uses PQC groups
+## Stage 7: PQC Swap — Same Daemon, PQC Crypto [completed]
+- [x] `OPENSSL_CONF=pki/openssl-pqc-runtime.cnf` + custom `/opt/openssl-pqc` in `openssl_wrapper._make_env`
+- [x] `-groups` flag from config (X25519MLKEM768)
+- [x] `server/config-pqc.yaml` + `client/config-pqc.yaml`
+- [x] Stage 6 verification suite repeated in PQC mode (ping + file transfer)
+- [x] `s_client -brief` shows `Signature type: mldsa65` + hybrid group (see architecture.md)
 
 ## Stage 8: CLI Tool (`vpnctl.py`) [completed]
 - [x] Implement `common/daemon_utils.py` — `IpcServer`, `StatusTracker`, role-based socket/PID paths
@@ -69,17 +69,17 @@
 - [x] Implemented `benchmark/plot_results.py`
 - [x] Validated: handshake bench produces CSVs, plots generate correctly
 
-## Stage 10: Execute Full Benchmark Suite [pending]
-- [ ] Classical handshake N>=20 trials → CSV
-- [ ] Classical latency (ping 100) → CSV
-- [ ] Classical throughput (iperf3 TCP+UDP) → CSV
-- [ ] Classical file transfer (100MB) → CSV
-- [ ] PQC handshake N>=20 trials → CSV
-- [ ] PQC latency (ping 100) → CSV
-- [ ] PQC throughput (iperf3 TCP+UDP) → CSV
-- [ ] PQC file transfer (100MB) → CSV
-- [ ] Run `plot_results.py` → comparison graphs
-- [ ] Sanity-check all numbers (PQC handshake slower, throughput similar)
+## Stage 10: Execute Full Benchmark Suite [completed — 25 trials/mode, see docs/BENCHMARKS.md]
+- [x] Classical handshake N>=20 trials → CSV
+- [x] Classical latency (ping 100) → CSV
+- [x] Classical throughput (iperf3 TCP+UDP) → CSV
+- [x] Classical file transfer (100MB) → CSV
+- [x] PQC handshake N>=20 trials → CSV
+- [x] PQC latency (ping 100) → CSV
+- [x] PQC throughput (iperf3 TCP+UDP) → CSV
+- [x] PQC file transfer (100MB) → CSV
+- [x] Run `plot_results.py` → comparison graphs
+- [x] Sanity-check all numbers (PQC handshake slower, throughput similar)
 
 ## Stage 11: Documentation + Final Polish [completed]
 - [x] Write `docs/setup.md` (fresh reproduction guide)
@@ -121,6 +121,17 @@
 - [x] `scripts/setup_routing.sh` multi-client namespaces (vpn_ns2..ns4)
 - [x] 10/10 tests pass incl. welcome->relay end-to-end + 2 concurrent relays
 - [x] netns run (2026-08-26, live): 3 concurrent clients on 10.8.0.2-.4 / ports 14431-33; isolated tunnels verified via per-client pings + concurrent iperf3 (491/926/1014 Mbps)
+
+## Phase 4b: Multi-client hardening (pre-VPS) [completed]
+- [x] Ports bound to IP slots (`data_port_base + slot`), pool capped at `max_clients` — reconnects never leave the firewall range (was: every reconnect burned a new port)
+- [x] `s_server -naccept 1`: process exits when its client hangs up → slot freed immediately, no ghost attach to a dead session's pipes
+- [x] `SessionManager.remove`/`reclaim_idle` drain the subprocess before releasing the slot
+- [x] Config-push (ip/gateway/dns) moved INSIDE the mTLS channel as the first frame; plaintext welcome carries only `{port}`; client validates the push (`framing.validate_config`)
+- [x] Fixed 5 s startup wait removed on both sides (config-push doubles as handshake-complete signal); client acks with an immediate keepalive
+- [x] `handshake_timeout` (10 s) reaps welcome slot claims that never finish mTLS (bounds welcome-port DoS)
+- [x] Addresses derived from `tun_net`; demux uses a packed-address dict instead of a linear scan
+- [x] `common/test_common.py` 47/47 (port recycling, tun_net, -naccept, stale reap, validate_config, real config-push over TLS)
+- [ ] netns run: reconnect lands on port ≤ 14433; bare `nc` to 14430 reaped in ~10 s; no 5 s first-ping stall
 
 ## Phase 2: Keepalive + reconnect [in progress]
 - [x] 15s keepalive control frame; server idle teardown 3×15s

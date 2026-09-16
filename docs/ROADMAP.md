@@ -91,6 +91,24 @@ unambiguous vs tunnel data.
 - `scripts/setup_routing.sh`: `vpn_ns2`..`vpn_ns4` client namespaces.
 - Verify: 2 concurrent clients, traffic isolation, concurrent iperf3 degradation.
 
+### Phase 4b — Multi-client hardening (pre-VPS)
+- **Slot-bound ports.** `IpPool` is capped at `max_clients`; each address is a
+  fixed slot and `data_port = data_port_base + slot`. Previously the port came
+  from the ever-increasing client id, so every reconnect drifted past the
+  14431–14433 range the deployment guide opens.
+- **`s_server -naccept 1`** + drain-before-release: the per-client process exits
+  when its client hangs up, and a slot is only re-issued after that exit.
+- **Config-push over TLS.** The plaintext welcome now carries only `{port}`; the
+  full `{ip, gateway, dns, subnet}` frame is written into `s_server` stdin ahead
+  of time and arrives as the first application record after mTLS. The client
+  validates it (`framing.validate_config`) before touching routes/DNS.
+- **No fixed startup delay.** Both sides used to sleep 5 s; the config-push now
+  doubles as the handshake-complete signal, and the client acks with an
+  immediate keepalive so the server marks it `connected` at once.
+- **`handshake_timeout`** (10 s): welcome slot claims that never complete mTLS
+  are reaped, bounding the cost of an unauthenticated welcome connection.
+- Addresses derive from `tun_net`; demux is a dict lookup on the packed dst.
+
 ### Phase 2 — Keepalive + reconnect
 - Control keepalive frame every **15s**; server idle teardown at **3×15s** via
   `SessionManager.idle_sessions`. `relay_tls_to_tun` calls `session.touch()` on any

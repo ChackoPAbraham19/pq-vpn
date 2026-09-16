@@ -16,7 +16,8 @@ sys.path.insert(0, PROJECT_DIR)
 
 from common.tun_utils import create_tun, destroy_tun
 from common.openssl_wrapper import start_tls_client, parse_brief_line
-from common.framing import pack_frame, pack_keepalive, unpack_config, HEADER_LEN, TYPE_DATA
+from common.framing import (pack_frame, pack_keepalive, unpack_config, validate_config,
+                            HEADER_LEN, TYPE_DATA)
 from common.daemon_utils import IpcServer, StatusTracker
 from common.ticket_cache import load_ticket, save_ticket_file
 from client.net_config import apply_tunnel_net, restore_tunnel_net
@@ -38,8 +39,14 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
-def welcome_handshake(server_host, server_port, timeout=5.0):
-    """Connect to the welcome port, read the config-push, return config dict."""
+def welcome_handshake(server_host, server_port, timeout=5.0) -> int:
+    """Connect to the welcome port and return the assigned TLS data port.
+
+    The welcome channel is plaintext, so it carries ONLY the port; the real
+    config (tunnel IP, gateway, DNS) arrives inside the mTLS data channel
+    (see read_pushed_config). A tampered port just fails certificate
+    verification.
+    """
     sock = socket.create_connection((server_host, server_port), timeout=timeout)
     try:
         buf = b''
@@ -50,10 +57,38 @@ def welcome_handshake(server_host, server_port, timeout=5.0):
             buf += chunk
             cfg, remaining = unpack_config(buf)
             if cfg is not None:
-                return cfg
-        raise RuntimeError('welcome closed before config received')
+                port = cfg.get('port')
+                if not isinstance(port, int) or not (0 < port < 65536):
+                    raise RuntimeError(f'welcome pushed invalid port: {port!r}')
+                return port
+        raise RuntimeError('welcome closed before port received')
     finally:
         sock.close()
+
+
+def read_pushed_config(tls_stdout_fd, timeout=10.0):
+    """Read the server's config-push, the first frame on the TLS channel.
+
+    Returns (config, remaining_buf): any bytes after the control frame belong
+    to the tunnel stream and must seed the TLS->TUN relay buffer.
+    """
+    buf = b''
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError('no config-push from server within '
+                               f'{timeout:.0f}s (handshake failed?)')
+        r, _, _ = select.select([tls_stdout_fd], [], [], min(remaining, POLL_INTERVAL))
+        if not r:
+            continue
+        chunk = os.read(tls_stdout_fd, 4096)
+        if not chunk:
+            raise RuntimeError('TLS channel closed before config-push')
+        buf += chunk
+        cfg, rest = unpack_config(buf)
+        if cfg is not None:
+            return validate_config(cfg), rest
 
 
 def drain_stderr(stream, stop, status=None, ticket_offered=False):
@@ -102,9 +137,30 @@ def drain_stderr(stream, stop, status=None, ticket_offered=False):
             break
 
 
-def relay_tls_to_tun(tls_stdout_fd, tun_fd, stop, status, no_gateway=False):
-    buf = b''
+def relay_tls_to_tun(tls_stdout_fd, tun_fd, stop, status, initial_buf=b''):
+    buf = initial_buf  # bytes that followed the config-push frame
     write_drops = 0
+
+    def drain_frames(buf):
+        nonlocal write_drops
+        while len(buf) >= HEADER_LEN:
+            ftype = buf[0]
+            length = struct.unpack('!I', buf[1:HEADER_LEN])[0]
+            frame_len = HEADER_LEN + length
+            if len(buf) < frame_len:
+                break
+            if ftype == TYPE_DATA:
+                try:
+                    os.write(tun_fd, buf[HEADER_LEN:frame_len])
+                except OSError as e:
+                    write_drops += 1
+                    if write_drops <= 3 or write_drops % 50 == 0:
+                        print(f'[client] TUN write dropped packet ({e})')
+                status.bytes_in += length
+            buf = buf[frame_len:]
+        return buf
+
+    buf = drain_frames(buf)  # a whole packet may already sit behind the config
     while not stop.is_set():
         try:
             r, _, _ = select.select([tls_stdout_fd], [], [], POLL_INTERVAL)
@@ -113,22 +169,7 @@ def relay_tls_to_tun(tls_stdout_fd, tun_fd, stop, status, no_gateway=False):
             chunk = os.read(tls_stdout_fd, 4096)
             if not chunk:
                 break
-            buf += chunk
-            while len(buf) >= HEADER_LEN:
-                ftype = buf[0]
-                length = struct.unpack('!I', buf[1:HEADER_LEN])[0]
-                frame_len = HEADER_LEN + length
-                if len(buf) < frame_len:
-                    break
-                if ftype == TYPE_DATA:
-                    try:
-                        os.write(tun_fd, buf[HEADER_LEN:frame_len])
-                    except OSError as e:
-                        write_drops += 1
-                        if write_drops <= 3 or write_drops % 50 == 0:
-                            print(f'[client] TUN write dropped packet ({e})')
-                    status.bytes_in += length
-                buf = buf[frame_len:]
+            buf = drain_frames(buf + chunk)
         except (BrokenPipeError, OSError):
             break
 
@@ -185,30 +226,18 @@ def run_session(config, args, stop, status):
 
     status.state = 'handshake-in-progress'
     print(f'[client] welcome handshake to {config["server_host"]}:{config["server_port"]}...')
-    welcome = welcome_handshake(config['server_host'], config['server_port'])
-    assigned_ip = welcome['ip']
-    data_port = welcome['port']
-    print(f'[client] assigned {assigned_ip} (data port {data_port}, gateway {welcome["gateway"]})')
+    data_port = welcome_handshake(config['server_host'], config['server_port'])
+    print(f'[client] assigned data port {data_port}')
 
     tun_name = config.get('tun_name', 'tun0')
     tun_mtu = config.get('tun_mtu', 1400)
-    print(f'[client] Opening TUN {tun_name} at {assigned_ip}/24...')
-    tun_fd = None
-    try:
-        tun_fd = create_tun(tun_name, f'{assigned_ip}/24', tun_mtu)
-    except OSError as e:
-        if e.errno == 16:  # EBUSY: a stale device from a previous drop is
-            # still held (e.g. after a crash). Delete and retry once.
-            print(f'[client] TUN {tun_name} busy — removing stale device')
-            destroy_tun(tun_name)
-            tun_fd = create_tun(tun_name, f'{assigned_ip}/24', tun_mtu)
-        else:
-            raise
-    print(f'[client] TUN fd={tun_fd}')
-    status.set_tun_addr(f'{assigned_ip}/24')
+    handshake_timeout = float(config.get('handshake_timeout', 10))
 
     clean = False
     applied_net = None
+    net_cfg = None
+    tun_fd = None
+    tls_proc = None
     try:
         print(f'[client] Connecting TLS to {config["server_host"]}:{data_port}...')
         MAX_RETRIES = 5
@@ -222,7 +251,6 @@ def run_session(config, args, stop, status):
                 # Intent, not outcome: whether the ticket is ACCEPTED is
                 # reported by drain_stderr at Verification: OK.
                 print(f'[client] offering cached ticket for resumption: {sess_in}')
-        tls_proc = None
         for attempt in range(MAX_RETRIES):
             tls_proc = start_tls_client(
                 host=config['server_host'],
@@ -238,22 +266,28 @@ def run_session(config, args, stop, status):
             print(f'[client] TLS subprocess started, pid={tls_proc.pid} (attempt {attempt+1}/{MAX_RETRIES})')
             status.tls_pid = tls_proc.pid
 
-            deadline = time.time() + 5.0
-            while time.time() < deadline:
-                if tls_proc.poll() is not None:
-                    err = tls_proc.stderr.read().decode(errors='replace').strip()
-                    if attempt < MAX_RETRIES - 1 and 'Connection refused' in err:
-                        print(f'[client] connection refused, retrying in {RETRY_DELAY}s...')
-                        time.sleep(RETRY_DELAY)
-                        break
-                    raise RuntimeError(f'TLS subprocess exited early with code {tls_proc.returncode}: {err}')
-                time.sleep(0.1)
-            else:
+            # The server's config-push is the first frame after mTLS; waiting
+            # for it doubles as handshake completion detection (no fixed delay).
+            try:
+                pushed, remaining = read_pushed_config(
+                    tls_proc.stdout.fileno(), timeout=handshake_timeout)
                 break
+            except (RuntimeError, ValueError) as e:
+                if tls_proc.poll() is None:
+                    tls_proc.terminate()
+                    tls_proc.wait()
+                err = tls_proc.stderr.read().decode(errors='replace').strip()
+                if attempt < MAX_RETRIES - 1 and 'Connection refused' in err:
+                    print(f'[client] connection refused, retrying in {RETRY_DELAY}s...')
+                    time.sleep(RETRY_DELAY)
+                    continue
+                raise RuntimeError(f'TLS session failed ({e}); rc={tls_proc.returncode}: {err}')
         else:
-            err = tls_proc.stderr.read().decode(errors='replace').strip() if tls_proc else 'unknown'
-            raise RuntimeError(f'Failed to connect after {MAX_RETRIES} attempts: {err}')
-        print('[client] connected')
+            raise RuntimeError(f'Failed to connect after {MAX_RETRIES} attempts')
+
+        assigned_ip = pushed['ip']
+        print(f'[client] connected; assigned {assigned_ip} '
+              f'(gateway {pushed["gateway"]}, dns {pushed["dns"]})')
         status.state = 'connected'
         # 'resumed' is set by drain_stderr on hard evidence (cert exchange
         # skipped); offering a ticket alone proves nothing — fresh s_server
@@ -262,16 +296,34 @@ def run_session(config, args, stop, status):
         if sess_out:
             print('[client] session cached for next reconnect')
 
-        applied_net = apply_tunnel_net({**config, 'gateway': welcome['gateway'],
-                                        'dns_servers': welcome['dns']},
-                                       dry_run=args.dry_run)
-        print(f'[client] network applied: {applied_net}')
-
         tls_stdin_fd = tls_proc.stdin.fileno()
         tls_stdout_fd = tls_proc.stdout.fileno()
+        # Ack immediately: the server only counts a session as connected once
+        # it receives application data, and reaps silent slot claims after its
+        # handshake_timeout — don't make it wait for the first 15s keepalive.
+        os.write(tls_stdin_fd, pack_keepalive())
+
+        print(f'[client] Opening TUN {tun_name} at {assigned_ip}/24...')
+        try:
+            tun_fd = create_tun(tun_name, f'{assigned_ip}/24', tun_mtu)
+        except OSError as e:
+            if e.errno == 16:  # EBUSY: a stale device from a previous drop is
+                # still held (e.g. after a crash). Delete and retry once.
+                print(f'[client] TUN {tun_name} busy — removing stale device')
+                destroy_tun(tun_name)
+                tun_fd = create_tun(tun_name, f'{assigned_ip}/24', tun_mtu)
+            else:
+                raise
+        print(f'[client] TUN fd={tun_fd}')
+        status.set_tun_addr(f'{assigned_ip}/24')
+
+        net_cfg = {**config, 'gateway': pushed['gateway'], 'dns_servers': pushed['dns']}
+        applied_net = apply_tunnel_net(net_cfg, dry_run=args.dry_run)
+        print(f'[client] network applied: {applied_net}')
 
         t1 = threading.Thread(target=relay_tun_to_tls, args=(tun_fd, tls_stdin_fd, stop, status), daemon=True)
-        t2 = threading.Thread(target=relay_tls_to_tun, args=(tls_stdout_fd, tun_fd, stop, status), daemon=True)
+        t2 = threading.Thread(target=relay_tls_to_tun,
+                              args=(tls_stdout_fd, tun_fd, stop, status, remaining), daemon=True)
         t3 = threading.Thread(target=drain_stderr, args=(tls_proc.stderr, stop, status, sess_in is not None), daemon=True)
         t4 = threading.Thread(
             target=keepalive_loop,
@@ -294,11 +346,12 @@ def run_session(config, args, stop, status):
         # Destroying the TUN releases the fd that made every reconnect fail
         # with EBUSY before this fix.
         if applied_net:
-            restore_tunnel_net(applied_net, {**config, 'gateway': welcome['gateway'],
-                                             'dns_servers': welcome['dns']},
-                               dry_run=args.dry_run)
+            restore_tunnel_net(applied_net, net_cfg, dry_run=args.dry_run)
             print(f'[client] network restored: {applied_net}')
-        destroy_tun(tun_name, tun_fd)
+        if tun_fd is not None:
+            destroy_tun(tun_name, tun_fd)
+        if tls_proc is not None and tls_proc.poll() is None:
+            tls_proc.terminate()
     return clean
 
 

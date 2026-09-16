@@ -104,7 +104,9 @@ sudo ip netns exec vpn_ns2 ping -c5 10.8.0.1          # tunnel up
 - x86_64 Ubuntu 24.04, ≥2 vCPU / 1 GB RAM (build needs a few GB disk).
 - Own the public IP (this is the TLS endpoint: `server_host` in client configs).
 - Security group: **allow inbound TCP 14430** (welcome) and the data port range
-  **14431–14433** from your remote client IPs only. No other inbound ports.
+  **`data_port_base` … `data_port_base + max_clients - 1`** (14431–14433 with the
+  defaults) from your remote client IPs only. No other inbound ports. Ports are
+  bound to client slots, so reconnects always land back inside this range.
 
 ### 6.2 Build (same as step 1–2) + PKI
 
@@ -135,11 +137,14 @@ persist_sysctl: true        # survive reboots
 dnsmasq: true
 dns_upstream: 1.1.1.1
 keepalive_interval: 15
+handshake_timeout: 10       # reap welcome slot claims that never finish mTLS
+max_clients: 3              # => data ports 14431..14433 (data_port_base + slot)
 ```
 
 ### 6.4 ufw + security group
 
 ```bash
+# welcome port + one data port per client slot (data_port_base .. +max_clients-1)
 sudo ufw allow from <YOUR_CLIENT_IP> to any port 14430,14431,14432,14433 proto tcp
 sudo ufw enable
 sudo ufw status verbose
