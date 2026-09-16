@@ -137,7 +137,7 @@ function kvRows(s) {
     ['Groups', s.groups],
     ['TUN', `${s.tun_name} ${s.tun_addr}`],
     ['Session', s.resumed ? 'resumed (ticket)' : 'full'],
-    ['Uptime', s.uptime_seconds + 's'],
+    ['Uptime', s.uptime_seconds + 's' + (s.session_seconds ? ` (session ${s.session_seconds}s)` : '')],
   ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
 }
 

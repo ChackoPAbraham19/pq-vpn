@@ -867,6 +867,41 @@ def test_welcome_send_failure_releases_slot():
 
 
 
+def test_welcome_limiter():
+    """Per-source token bucket: burst, then deny; refills at rate; sources independent."""
+    from server.session_manager import WelcomeLimiter
+    lim = WelcomeLimiter(rate=1.0, burst=3)
+    t = 1000.0
+    first = [lim.allow('10.0.0.9', now=t) for _ in range(4)]
+    test('burst of 3 allowed, 4th denied', first == [True, True, True, False])
+    test('other source unaffected', lim.allow('10.0.0.10', now=t))
+    test('still denied before refill', not lim.allow('10.0.0.9', now=t + 0.5))
+    test('one token refilled after 1s at rate 1/s', lim.allow('10.0.0.9', now=t + 1.5))
+    test('and denied again immediately', not lim.allow('10.0.0.9', now=t + 1.5))
+    # Legit client pattern: reconnect backoff 1,2,4,8... never trips the limit.
+    ok_backoff = all(lim.allow('10.0.0.42', now=t + d) for d in (0, 1, 3, 7, 15, 31))
+    test('reconnect backoff cadence never rate-limited', ok_backoff)
+    # Prune: idle entries are dropped once the table grows past 256.
+    big = WelcomeLimiter(rate=1.0, burst=1, idle_expiry=60.0)
+    for i in range(300):
+        big.allow(f'192.0.2.{i // 256}.{i % 256}', now=t)
+    big.allow('198.51.100.1', now=t + 120)  # triggers prune of 60s-idle entries
+    test('idle sources pruned (table bounded)', len(big) <= 2)
+
+
+def test_session_uptime_tracking():
+    from common.daemon_utils import StatusTracker
+    st = StatusTracker({'mode': 'classical'}, tun_name='tun0', tun_addr='pending')
+    test('no session uptime before connect', st.snapshot()['session_seconds'] == 0)
+    st.mark_session_start()
+    st.session_start -= 5  # pretend 5s have passed
+    test('session uptime counts from connect', st.snapshot()['session_seconds'] >= 5)
+    st.reset_session()
+    test('reset_session clears session uptime (daemon uptime untouched)',
+         st.snapshot()['session_seconds'] == 0 and st.snapshot()['uptime_seconds'] >= 0)
+
+
+
 if __name__ == '__main__':
     print('=== PQ-VPN Common Module Tests ===')
     print()
@@ -896,6 +931,8 @@ if __name__ == '__main__':
     test_validate_config_rejects_garbage()
     test_config_push_over_tls_real()
     test_welcome_send_failure_releases_slot()
+    test_welcome_limiter()
+    test_session_uptime_tracking()
     print()
     total = PASS + FAIL
     print(f'{PASS}/{total} passed' + (' ✅' if FAIL == 0 else ' ❌'))

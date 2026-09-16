@@ -85,6 +85,46 @@ class IpPool:
             return [str(a) for a in sorted(self._in_use.values())]
 
 
+class WelcomeLimiter:
+    """Per-source-IP token bucket for the plaintext welcome port.
+
+    `handshake_timeout` bounds what ONE fake claim costs (a slot for ~10 s);
+    this bounds how many claims a single source can make, so a looping `nc`
+    cannot keep the pool full. A real client's reconnects arrive at the
+    backoff cadence (1 -> 30 s), far under the default 1/s with burst 3.
+    """
+
+    def __init__(self, rate: float = 1.0, burst: int = 3, idle_expiry: float = 60.0):
+        self.rate = float(rate)
+        self.burst = float(burst)
+        self.idle_expiry = idle_expiry
+        self._buckets: dict[str, tuple[float, float]] = {}  # ip -> (tokens, last)
+        self._lock = threading.Lock()
+
+    def allow(self, ip: str, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            tokens, last = self._buckets.get(ip, (self.burst, now))
+            tokens = min(self.burst, tokens + (now - last) * self.rate)
+            ok = tokens >= 1.0
+            if ok:
+                tokens -= 1.0
+            self._buckets[ip] = (tokens, now)
+            if len(self._buckets) > 256:
+                self._prune(now)
+            return ok
+
+    def _prune(self, now: float):
+        dead = [ip for ip, (_, last) in self._buckets.items()
+                if now - last >= self.idle_expiry]
+        for ip in dead:
+            del self._buckets[ip]
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._buckets)
+
+
 class ClientSession:
     def __init__(self, client_id: int, host_id: int, ip: str, data_port: int,
                  gateway: str, dns: str):

@@ -18,7 +18,7 @@ from common.tun_utils import create_tun
 from common.openssl_wrapper import start_tls_server
 from common.framing import pack_frame, pack_config, unpack_frames, HEADER_LEN, TYPE_DATA
 from common.daemon_utils import IpcServer, StatusTracker
-from server.session_manager import SessionManager, ipv4_dst
+from server.session_manager import SessionManager, WelcomeLimiter, ipv4_dst
 from server.net_config import setup_nat, teardown_nat, start_dnsmasq, stop_dnsmasq, drain_dnsmasq
 
 POLL_INTERVAL = 0.5
@@ -332,11 +332,25 @@ def main():
             args=(manager, idle_timeout, handshake_timeout, status, stop), daemon=True)
         idle_thread.start()
 
+        limiter = WelcomeLimiter(rate=float(config.get('welcome_rate', 1.0)),
+                                 burst=int(config.get('welcome_burst', 3)))
+        limited_logged: dict[str, float] = {}  # src ip -> last log time
+
         listener.settimeout(0.5)
         while not stop.is_set():
             try:
                 conn, addr = listener.accept()
             except socket.timeout:
+                continue
+            if not limiter.allow(addr[0]):
+                # Rejected BEFORE any slot/subprocess is touched, so a flood
+                # costs the server one accept() and nothing else.
+                conn.close()
+                now = time.monotonic()
+                if now - limited_logged.get(addr[0], 0) >= 60:
+                    limited_logged[addr[0]] = now
+                    print(f'[server] welcome rate-limited: {addr[0]} '
+                          f'(> {limiter.burst:.0f} burst / {limiter.rate:g}/s)')
                 continue
             print(f'[server] welcome connection from {addr}')
             t = threading.Thread(

@@ -16,3 +16,5 @@ dnsmasq: true
 dns_upstream: 1.1.1.1
 keepalive_interval: 15
 handshake_timeout: 10   # reap slot claims that never complete mTLS (s)
+welcome_rate: 1.0        # welcome-port token bucket: refill per second per source IP
+welcome_burst: 3         # ... and burst size (a real client reconnects at 1-30 s backoff)

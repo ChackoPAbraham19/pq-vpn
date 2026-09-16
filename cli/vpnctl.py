@@ -267,7 +267,11 @@ def _print_status(label: str, s: dict):
         click.echo(f'  {"Session":<{width}}resumed (ticket cache hit)')
     click.echo(f'  {"TUN":<{width}}{s.get("tun_name", "?")} — {s.get("tun_addr", "?")}')
     click.echo(f'  {"Groups":<{width}}{s.get("groups", "?")}')
-    click.echo(f'  {"Uptime":<{width}}{s.get("uptime_seconds", 0)}s')
+    sess = s.get('session_seconds')
+    if sess:
+        click.echo(f'  {"Uptime":<{width}}{s.get("uptime_seconds", 0)}s (session {sess}s)')
+    else:
+        click.echo(f'  {"Uptime":<{width}}{s.get("uptime_seconds", 0)}s')
     click.echo(f'  {"Bytes in":<{width}}{_fmt_bytes(s.get("bytes_in", 0))}')
     click.echo(f'  {"Bytes out":<{width}}{_fmt_bytes(s.get("bytes_out", 0))}')
     clients = s.get('clients') or []

@@ -235,9 +235,12 @@ The sockets are created `0666` so a non-root `vpnctl`/dashboard can talk to root
 - The welcome port is unauthenticated: anyone can claim a slot for up to
   `handshake_timeout` seconds and, in that window, race the legitimate client
   to its data port (a foreign TCP connect consumes the `-naccept 1` budget and
-  the client falls back to a fresh welcome). Rate limiting per source address
-  is Future Work; mTLS still guarantees no tunnel is ever established with an
-  unauthenticated peer.
+  the client falls back to a fresh welcome). Two bounds keep this cheap: the
+  10 s reap, and a per-source token bucket on the welcome port
+  (`welcome_rate` 1/s, `welcome_burst` 3 — `WelcomeLimiter`), applied before any
+  slot or subprocess is touched, so a flooding source costs one `accept()` per
+  attempt. A distributed flood from many sources is still Future Work; mTLS
+  guarantees no tunnel is ever established with an unauthenticated peer.
 - **Session resumption is connection-lifetime only**: each client session gets a
   fresh `s_server` process, which generates fresh TLS ticket-encryption keys.
   A cached ticket from a previous server lifetime therefore never resumes

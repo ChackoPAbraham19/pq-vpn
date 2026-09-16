@@ -50,7 +50,8 @@ class StatusTracker:
         self.resumed = False
         self.negotiated: dict = {}   # actual TLS negotiation result (see note_negotiated)
         self.clients = []
-        self.start_time = time.time()
+        self.start_time = time.time()      # daemon process start
+        self.session_start = None          # set when a tunnel becomes 'connected'
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -62,6 +63,8 @@ class StatusTracker:
                 'bytes_in': self.bytes_in,
                 'bytes_out': self.bytes_out,
                 'uptime_seconds': int(time.time() - self.start_time),
+                'session_seconds': (int(time.time() - self.session_start)
+                                    if self.session_start is not None else 0),
                 'tls_pid': self.tls_pid,
                 'resumed': self.resumed,
                 'negotiated': dict(self.negotiated),
@@ -81,6 +84,13 @@ class StatusTracker:
             self.negotiated = {}
             self.tls_pid = 0
             self.tun_addr = 'pending'
+            self.session_start = None
+
+    def mark_session_start(self):
+        """Call when the tunnel becomes usable: session uptime counts from here,
+        independent of daemon uptime (which survives reconnects)."""
+        with self._lock:
+            self.session_start = time.time()
 
     def note_negotiated(self, key: str, value):
         with self._lock:

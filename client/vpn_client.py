@@ -303,6 +303,7 @@ def run_session(config, args, stop, status):
         print(f'[client] connected; assigned {assigned_ip} '
               f'(gateway {pushed["gateway"]}, dns {pushed["dns"]})')
         status.state = 'connected'
+        status.mark_session_start()
         # 'resumed' is set by drain_stderr on hard evidence (cert exchange
         # skipped); offering a ticket alone proves nothing — fresh s_server
         # processes regenerate ticket keys.
