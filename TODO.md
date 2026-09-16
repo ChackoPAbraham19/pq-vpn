@@ -184,9 +184,9 @@
 - [x] Added `client/config-pqc-ns3.yaml` / `config-pqc-ns4.yaml` (PQC multi-client demo configs)
 - [x] netns run (2026-08-26, live): `scripts/demo.sh --mode pqc --clients 3` full pass — 3 tunnels stable through pings (0% loss, ~1ms) + concurrent iperf3, clean teardown. Fixed en route: iptables arg order (tests had blessed it), server tun0 never addressed/up'd, tunnel-self-blackhole (missing /32 transport route), TUN EBUSY reconnect wedge, relay teardown on transient TUN-write errors
 
-## Phase 4c: live checks still owed (need sudo) [pending]
-- [ ] Welcome rate limiter on the wire: 8 rapid `nc -z` from vpn_ns4 → `welcome rate-limited: 192.168.220.2` logged, ≤3 claims, real clients unaffected, killed client still reconnects
-- [ ] `vpnctl status` shows `Uptime <daemon>s (session <n>s)` with session resetting after a kick
+## Phase 4c: live checks [completed 2026-09-17]
+- [x] Welcome rate limiter on the wire: 8 rapid `nc -z` from vpn_ns4 → one `welcome rate-limited: 192.168.220.2 (> 3 burst / 1/s)`, real clients unaffected (ping 0% loss), the allowed claims released instantly via the welcome-send-failure guard; restarted ns3 reconnected normally
+- [x] `vpnctl status` shows `Uptime <daemon>s (session <n>s)` live; session reset after a process restart shown (4s/4s); the daemon≠session split after a kick is covered by `test_session_uptime_tracking`
 
 ## Phase 7a: VPS deployment prep (no purchase) [completed]
 - [x] `server/config-vps.example.yaml` / `client/config-vps.example.yaml` (real configs git-ignored)
