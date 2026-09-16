@@ -104,6 +104,48 @@ def test_keepalive_writes_over_pipe():
          f'{len(frames)} frames: {frames}')
 
 
+def test_relay_exits_on_session_stop():
+    """relay_tun_to_tls on an IDLE tun must exit when the per-session stop is
+    set (TLS side died) even though the global stop is clear. Before the fix
+    it waited for a TUN packet to trip a write error — possibly forever."""
+    import client.vpn_client as vc
+
+    class Status:
+        bytes_out = 0
+
+    tun_r, tun_w = os.pipe()      # never written: idle tunnel
+    tls_r, tls_w = os.pipe()
+    stop = threading.Event()
+    sess_stop = threading.Event()
+    t = threading.Thread(target=vc.relay_tun_to_tls,
+                         args=(tun_r, tls_w, stop, Status(), sess_stop), daemon=True)
+    t.start()
+    time.sleep(0.3)
+    still_running = t.is_alive()
+    sess_stop.set()
+    t.join(timeout=1.5)
+    test('idle TUN relay exits on session stop (global stop clear)',
+         still_running and not t.is_alive() and not stop.is_set())
+    for fd in (tun_r, tun_w, tls_r, tls_w):
+        os.close(fd)
+
+
+def test_keepalive_broken_pipe_sets_session_stop():
+    """A keepalive write into a dead TLS stdin flags sess_stop."""
+    import client.vpn_client as vc
+
+    r, w = os.pipe()
+    os.close(r)                    # peer gone: writes raise EPIPE
+    stop = threading.Event()
+    sess_stop = threading.Event()
+    t = threading.Thread(target=vc.keepalive_loop, args=(w, 0.05, stop, sess_stop), daemon=True)
+    t.start()
+    t.join(timeout=2)
+    test('keepalive BrokenPipe sets session stop and returns',
+         not t.is_alive() and sess_stop.is_set() and not stop.is_set())
+    os.close(w)
+
+
 if __name__ == '__main__':
     print('=== PQ-VPN Phase 2 (keepalive + reconnect) Tests ===')
     print()
@@ -112,6 +154,8 @@ if __name__ == '__main__':
     test_session_touch_resets_idle()
     test_keepalive_does_not_teardown_idle()
     test_keepalive_writes_over_pipe()
+    test_relay_exits_on_session_stop()
+    test_keepalive_broken_pipe_sets_session_stop()
     print()
     total = PASS + FAIL
     print(f'{PASS}/{total} passed' + (' ✅' if FAIL == 0 else ' ❌'))

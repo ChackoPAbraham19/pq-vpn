@@ -174,8 +174,15 @@ def relay_tls_to_tun(tls_stdout_fd, tun_fd, stop, status, initial_buf=b''):
             break
 
 
-def relay_tun_to_tls(tun_fd, tls_stdin_fd, stop, status):
-    while not stop.is_set():
+def _halted(stop, sess_stop) -> bool:
+    return stop.is_set() or (sess_stop is not None and sess_stop.is_set())
+
+
+def relay_tun_to_tls(tun_fd, tls_stdin_fd, stop, status, sess_stop=None):
+    """TUN -> TLS. `sess_stop` is the per-session event set when the TLS side
+    dies; without it this loop only notices a dead peer on its next write,
+    which on an idle tunnel may be never (reconnect would never start)."""
+    while not _halted(stop, sess_stop):
         try:
             r, _, _ = select.select([tun_fd], [], [], POLL_INTERVAL)
             if not r:
@@ -195,14 +202,21 @@ def next_backoff(current: float, factor: float = 2.0, cap: float = 30.0) -> floa
     return min(current * factor, cap)
 
 
-def keepalive_loop(tls_stdin_fd, interval, stop):
-    """Send a control keepalive frame every `interval` seconds while connected."""
-    while not stop.is_set():
-        if stop.wait(interval):
+def keepalive_loop(tls_stdin_fd, interval, stop, sess_stop=None):
+    """Send a control keepalive frame every `interval` seconds while connected.
+
+    A failed write means the TLS subprocess is gone: flag `sess_stop` so the
+    TUN relay (and run_session) unwind instead of waiting for TUN traffic.
+    """
+    waiter = sess_stop if sess_stop is not None else stop
+    while not _halted(stop, sess_stop):
+        if waiter.wait(interval) or _halted(stop, sess_stop):
             return
         try:
             os.write(tls_stdin_fd, pack_keepalive())
         except (BrokenPipeError, OSError):
+            if sess_stop is not None:
+                sess_stop.set()
             return
 
 
@@ -321,21 +335,29 @@ def run_session(config, args, stop, status):
         applied_net = apply_tunnel_net(net_cfg, dry_run=args.dry_run)
         print(f'[client] network applied: {applied_net}')
 
-        t1 = threading.Thread(target=relay_tun_to_tls, args=(tun_fd, tls_stdin_fd, stop, status), daemon=True)
+        # Per-session stop: set when the TLS side ends so every relay thread
+        # unwinds promptly, even with no TUN traffic to trip a write error.
+        sess_stop = threading.Event()
+        t1 = threading.Thread(target=relay_tun_to_tls,
+                              args=(tun_fd, tls_stdin_fd, stop, status, sess_stop), daemon=True)
         t2 = threading.Thread(target=relay_tls_to_tun,
                               args=(tls_stdout_fd, tun_fd, stop, status, remaining), daemon=True)
         t3 = threading.Thread(target=drain_stderr, args=(tls_proc.stderr, stop, status, sess_in is not None), daemon=True)
         t4 = threading.Thread(
             target=keepalive_loop,
-            args=(tls_stdin_fd, config.get('keepalive_interval', 15), stop),
+            args=(tls_stdin_fd, config.get('keepalive_interval', 15), stop, sess_stop),
             daemon=True)
         t1.start()
         t2.start()
         t3.start()
         t4.start()
         print(f'[client] Relaying... (TUN {tun_name} <-> TLS pid={tls_proc.pid})')
-        t1.join()
+        # t2 is the thread that reliably sees the TLS side die (EOF on
+        # s_client stdout); its exit cascades to t1 via sess_stop. If t1 dies
+        # first (write error), s_client exits and t2 follows on EOF anyway.
         t2.join()
+        sess_stop.set()
+        t1.join()
 
         clean = stop.is_set()
         status.state = 'disconnected'

@@ -104,7 +104,7 @@ Packets are relayed by two daemon threads:
 1. **TUN → TLS**: `select()` + `os.read(tun_fd)` → pack → `os.write(tls_stdFd)`
 2. **TLS → TUN**: accumulate TCP stream bytes in buffer → unpack → `os.write(tun_fd)`
 
-Both use 500ms polling intervals and exit on `BrokenPipeError` or `Eof` (stopping signal). Idle sessions are torn down by a keepalive-based idle monitor, and the client reconnects with exponential backoff (1→30s).
+Both use 500ms polling intervals and exit on `BrokenPipeError` or EOF. On the client the TLS→TUN thread is the one that reliably sees the TLS side die (EOF on `s_client` stdout); its exit sets a per-session stop event that the TUN→TLS thread and the keepalive loop also watch, so a server-side teardown (idle reap, dashboard kick, crash) unwinds the whole session within ~0.5s even when the tunnel is idle — previously the TUN reader only noticed on its next write, which on an idle tunnel could be never. Idle sessions are torn down by a keepalive-based idle monitor, and the client reconnects with exponential backoff (1→30s).
 
 ## TLS Configuration
 
