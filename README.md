@@ -1,114 +1,145 @@
 # PQ-VPN — Post-Quantum Secure VPN Tunnel
 
-A Linux TUN-based VPN tunnel with dual-mode TLS: classical ECDSA and post-quantum ML-DSA-65/ML-KEM-768. Uses `openssl s_server/s_client` subprocesses with oqs-provider for PQC handshakes, wrapped in Python relay daemons.
+A working Linux VPN (real TUN device, real routing, real DNS) whose TLS 1.3 control
+plane can run either **classical** crypto (ECDSA P-256 + X25519) or **post-quantum**
+crypto (NIST **ML-DSA-65** certificates + hybrid **X25519MLKEM768** key exchange) with a
+one-line config switch — so the cost of going post-quantum can be measured
+apples-to-apples on the same tunnel.
 
-## Quick Start (3 Commands)
+**Why:** traffic recorded today can be decrypted once a large quantum computer exists
+("harvest now, decrypt later"). NIST finalised the replacement algorithms (FIPS 203/204)
+in 2024; this project puts them in a complete VPN and measures what they cost.
+
+**Result:** post-quantum security adds ~10 ms to the one-time handshake and **nothing**
+to steady-state latency or throughput.
+
+## Quick start
 
 ```bash
-# 1. Install custom OpenSSL + liboqs + oqs-provider (~15 min)
-cd /home/YOUR_USER/VPN
+# 0. Rootless sanity — all unit suites + a real 5-trial handshake benchmark (both modes)
+bash scripts/demo.sh --dry-run --mode pqc
+
+# 1. One-time: build OpenSSL 3.4 + liboqs + oqs-provider into /opt/openssl-pqc (~15 min)
 sudo bash scripts/install_custom_openssl.sh
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+bash pki/gen_classical_ca.sh && bash pki/gen_pqc_ca.sh
 
-# 2. Generate PKI and setup network namespaces
-.venv/bin/pip install -r requirements.txt
-bash pki/gen_classical_ca.sh
-bash pki/gen_pqc_ca.sh
-sudo bash scripts/setup_routing.sh
+# 2. Live demo on one machine: netns harness → server + 3 clients → ping → iperf3 → teardown
+sudo bash scripts/demo.sh --mode pqc --clients 3           # add --keep to leave it running
 
-# 3. Start classical or PQC tunnel
-# Classical:
-sudo ip netns exec vpn_ns1 .venv/bin/python3 server/vpn_server.py --config server/config.yaml &
-sudo ip netns exec vpn_ns2 .venv/bin/python3 client/vpn_client.py --config client/config.yaml &
-
-# PQC:
-sudo ip netns exec vpn_ns1 .venv/bin/python3 server/vpn_server.py --config server/config-pqc.yaml &
-sudo ip netns exec vpn_ns2 .venv/bin/python3 client/vpn_client.py --config client/config-pqc.yaml &
-
-# Verify
-sudo ip netns exec vpn_ns2 ping -c 5 10.8.0.1
-
-# Teardown
-sudo bash scripts/setup_routing.sh --teardown
+# 3. Or prove it builds from a bare Ubuntu 24.04 (Docker)
+bash scripts/clean_build_check.sh
 ```
 
-Or run the one-shot demo (setup → tunnel → verify → teardown):
-`sudo bash scripts/demo.sh --mode pqc --clients 2` (rootless sanity: `bash scripts/demo.sh --dry-run`).
+Once a tunnel is up:
+
+```bash
+.venv/bin/python3 cli/vpnctl.py status                     # server + every client, ports, bytes, negotiated crypto
+PQVPN_DASH_TOKEN=mytoken .venv/bin/python3 dashboard/dashboard_server.py   # http://127.0.0.1:8080
+.venv/bin/python3 cli/vpnctl.py disconnect
+```
+
+## What's implemented
+
+Everything below is exercised by the unit suites (**126 tests**, `demo.sh --dry-run`) and
+was verified live in the network-namespace harness with 2–3 concurrent PQC clients.
+
+- **Dual-mode PKI** — ECDSA P-256 chain and ML-DSA-65 chain, both with mutual TLS.
+  Live `s_client -brief` shows `Signature type: mldsa65` on the PQC path.
+- **Tunnel** — raw IP packets from a TUN device, framed `[type:1][len:4][payload]`
+  inside a TLS 1.3 stream via `openssl s_server`/`s_client` subprocesses (Python's
+  `ssl` module cannot load ML-DSA certificates at all).
+- **Multi-client** — a plaintext *welcome* port hands each client a dedicated data port;
+  the tunnel IP/gateway/DNS config is pushed as the first frame **inside** mTLS, so
+  nothing tamperable is ever applied. 3 client slots with **fixed ports 14431–14433**
+  that survive any number of reconnects; a shared TUN reader demuxes by destination IP.
+- **Resilience** — 15 s keepalives, idle teardown at 45 s, per-client `s_server` exits
+  the moment its client hangs up, client reconnects with 1→30 s backoff. Verified live:
+  a kicked client is back in ~1 s.
+- **Hardening** — welcome slot claims that never finish mTLS are reaped at 10 s; a
+  per-source token bucket (1/s, burst 3) on the welcome port; the config push is
+  validated before touching routes or DNS.
+- **Real networking** — NAT MASQUERADE + FORWARD rules, dnsmasq on the tunnel, default
+  route via tun0 with a pinned `/32` transport route, DNS via `resolvectl` or
+  `resolv.conf`, all restored on exit.
+- **TLS session tickets** — cached per server and offered on reconnect (`Reused` verified
+  for both modes in the benchmark; see limitations).
+- **Tooling** — `vpnctl` CLI over Unix-socket IPC; FastAPI + WebSocket **dashboard** with
+  per-tunnel rates and a token-guarded kick; `demo.sh` for a reproducible run.
 
 ## Architecture
 
 ```
-┌──────────────────┐                         ┌──────────────────┐
-│   Client (ns2)    │   TLS 1.3 (PQC or ECDSA)  │   Server (ns1)   │
-│  10.8.0.2 (tun0)  │◄───────────────────────►│  10.8.0.1 (tun0)  │
-│ vpn_client daemon  │  openssl s_client/s_server │  vpn_server daemon│
-└──────────────────┘                         └──────────────────┘
+  Client (vpn_ns2..4)                                   Server (vpn_ns1)
+  ┌──────────────────┐   welcome: {port} (plaintext)   ┌────────────────────────────┐
+  │ app → tun0 10.8.0.N │ ───────────────────────────► │ welcome listener :14430    │
+  │  vpn_client daemon  │   TLS 1.3 mTLS to :1443N     │ SessionManager: 3 slots    │
+  │  openssl s_client   │ ◄──────────────────────────► │ s_server -accept 1443N ×N  │
+  │  ticket cache       │   1st frame: {ip,gw,dns}     │ shared TUN demux → tun0    │
+  └──────────────────┘   then framed IP packets       │ NAT + dnsmasq → internet   │
+                                                       └────────────────────────────┘
+        vpnctl / dashboard ◄── /tmp/pqvpn-{server,client}.sock (JSON status + commands)
 ```
 
-**Data plane**: raw IP packets from TUN device, length-prefixed (`4-byte header + payload`) inside TLS encrypted stream.
+**Classical:** ECDSA P-256 certs, X25519, system OpenSSL 3.0.
+**PQC:** ML-DSA-65 certs, `-groups X25519MLKEM768`, custom OpenSSL 3.4.7 + oqs-provider
+(`/opt/openssl-pqc`). Full detail in [`docs/architecture.md`](docs/architecture.md).
 
-**Control plane**: standard TLS 1.3 handshake. Classical mode uses ECDSA P-256 + X25519. PQC mode uses ML-DSA-65 + X25519MLKEM768 hybrid key exchange.
-
-## Modes
-
-| Feature | Classical | PQC |
-|---------|-----------|-----|
-| Signature algorithm | ECDSA P-256 (prime256v1) | ML-DSA-65 (mldsa65) |
-| Key exchange | X25519 | X25519MLKEM768 (hybrid) |
-| OpenSSL version | System (3.0.13) | Custom 3.4.7 (`/opt/openssl-pqc`) |
-| Config file | `server/config.yaml`, `client/config.yaml` | `server/config-pqc.yaml`, `client/config-pqc.yaml` |
-
-## Benchmark Summary (25 trials each mode)
+## Benchmarks (25 trials per mode, loopback + netns)
 
 | Metric | Classical | PQC | Overhead |
 |--------|-----------|-----|----------|
-| **TLS Handshake** (median) | 15.0 ms | 25.4 ms | 1.70x |
-| **Resumed handshake** (median) | 13.5 ms | 23.7 ms | 1.03x |
-| **Ping latency** (avg RTT) | 2.29 ms | 2.33 ms | 1.7% |
-| **TCP throughput** | 1268 Mbps | 533 Mbps | noise-bound |
-| **UDP throughput** | 999.9 Mbps | 999.9 Mbps | 0% |
-| **100MB file transfer** | 0.68 s | 1.31 s | run variance |
+| **TLS handshake** (median) | 15.0 ms | 25.4 ms | 1.70× |
+| **Resumed handshake** (median) | 13.5 ms | 23.7 ms | ~1.0× |
+| **Ping RTT through tunnel** | 2.29 ms | 2.33 ms | 1.7 % |
+| **TCP throughput** (iperf3) | 1268 Mbps | 533 Mbps | run variance |
+| **UDP throughput** | 999.9 Mbps | 999.9 Mbps | 0 % |
+| **100 MB file transfer** | 0.68 s | 1.31 s | run variance |
 
-**Takeaway**: PQC adds significant one-time handshake overhead (larger certs +
-key shares) but zero measurable penalty on steady-state throughput and latency.
-TLS session resumption cuts even the handshake cost. Full methodology, raw CSVs,
-and interpretation: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+Larger certificates and key shares make the one-time handshake slower; the data plane
+is unaffected (throughput is bounded by the Python relay, not the crypto). Live
+3-client run: ~1 ms ping, 0.5–1 Gbps per client concurrently. Methodology, raw CSVs and
+plots: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
-## CLI
-
-```bash
-.venv/bin/python3 cli/vpnctl.py connect -c client/config-pqc.yaml
-.venv/bin/python3 cli/vpnctl.py status
-.venv/bin/python3 cli/vpnctl.py disconnect
-```
-
-## Project Structure
+## Project structure
 
 ```
 VPN/
-├── client/          # VPN client daemon + configs
-├── server/          # VPN server daemon + configs
-├── common/          # Shared modules (framing, TUN, TLS wrapper, IPC)
-├── cli/             # CLI tool (vpnctl.py + Click)
-├── pki/             # Certificate generation scripts + certs
-│   ├── gen_classical_ca.sh   # ECDSA P-256 PKI
-│   └── gen_pqc_ca.sh         # ML-DSA-65 PKI
-├── scripts/         # Build, network setup, diagnostics, rollback
-├── benchmark/       # Benchmark scripts, results, plots
-├── docs/            # Setup guide, architecture, deployment, benchmark report
-└── scripts/         # Build, network setup, diagnostics, rollback, demo
+├── client/       vpn_client.py, net_config.py (route/DNS), config*.yaml
+├── server/       vpn_server.py, session_manager.py (slots/ports/limiter), net_config.py (NAT/dnsmasq)
+├── common/       framing, TUN utils, OpenSSL wrapper, IPC + status, ticket cache, test_*.py
+├── cli/          vpnctl.py
+├── dashboard/    dashboard_server.py (FastAPI/WS, token auth), index.html, test_dashboard.py
+├── pki/          gen_classical_ca.sh, gen_pqc_ca.sh, OpenSSL configs (certs are git-ignored)
+├── scripts/      install_custom_openssl.sh, setup_routing.sh (netns), demo.sh, clean_build_check.sh, deploy_vps.sh
+├── deploy/       pqvpn-server.service (systemd)
+├── benchmark/    bench scripts, results/*.csv, plots
+├── docs/         architecture, BENCHMARKS, DEPLOYMENT, setup, ROADMAP
+└── Dockerfile    clean-build proof from ubuntu:24.04
 ```
+
+## Limitations (honest list)
+
+- **Python prototype**: throughput tops out around 0.5–1.3 Gbps per client because of
+  the Python relay and pipe copies, not the crypto.
+- **Session resumption is per-server-process**: each client gets a fresh `s_server`,
+  which regenerates ticket keys, so tickets resume within a benchmark but not across
+  daemon restarts. Status reports `resumed` only on hard evidence.
+- **No mid-stream rekey** (`s_server` cannot renegotiate); reconnect re-handshakes.
+- **Welcome port** is unauthenticated by design; cost is bounded (10 s reap + rate
+  limit) but a distributed flood could still fill 3 slots.
+- **Tested on one machine** (netns) and in Docker; the real-internet VPS run is the
+  remaining roadmap item — [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) and
+  `scripts/deploy_vps.sh` are ready for it.
 
 ## Prerequisites
 
-- Ubuntu 24.04 (or 22.04)
-- Python 3.12
-- Root access (for TUN devices and network namespaces)
-- Build tools: `build-essential`, `cmake`, `ninja-build`, `libssl-dev`
-- Benchmarking: `iperf3`
+Ubuntu 24.04 (or 22.04), Python 3.12, root for TUN/netns, `build-essential cmake
+ninja-build libssl-dev`, `iperf3` for throughput benchmarks, Docker optional.
 
 ## References
 
-- [liboqs](https://github.com/open-quantum-safe/liboqs)
-- [oqs-provider](https://github.com/open-quantum-safe/oqs-provider)
-- [NIST FIPS 203 (ML-KEM)](https://csrc.nist.gov/pubs/fips/203/final)
-- [NIST FIPS 204 (ML-DSA)](https://csrc.nist.gov/pubs/fips/204/final)
+- [liboqs](https://github.com/open-quantum-safe/liboqs) ·
+  [oqs-provider](https://github.com/open-quantum-safe/oqs-provider)
+- [NIST FIPS 203 (ML-KEM)](https://csrc.nist.gov/pubs/fips/203/final) ·
+  [NIST FIPS 204 (ML-DSA)](https://csrc.nist.gov/pubs/fips/204/final)
