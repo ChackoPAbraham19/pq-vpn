@@ -31,6 +31,7 @@ def start_tls_server(
     groups: str = 'X25519MLKEM768',
     config_dir: str | None = None,
     naccept: int | None = 1,
+    crl_path: str | None = None,
 ) -> subprocess.Popen:
     """Spawn `openssl s_server`.
 
@@ -38,6 +39,11 @@ def start_tls_server(
     disconnects, so the relay sees EOF immediately and the slot/port is freed
     without waiting for the idle timer. Pass None for a long-lived listener
     (benchmarks prime tickets against one).
+
+    crl_path: when the file exists, client certificates are checked against
+    it and a revoked one is refused at the handshake (alert 44) — nothing the
+    client sends ever reaches the relay. Read at spawn time, so a fresh CRL
+    applies to the very next session without restarting the daemon.
     """
     cmd = ['openssl', 's_server']
     if mode == 'pqc':
@@ -52,6 +58,8 @@ def start_tls_server(
     ])
     if naccept is not None:
         cmd.extend(['-naccept', str(naccept)])
+    if crl_path and os.path.isfile(crl_path):
+        cmd.extend(['-CRL', crl_path, '-crl_check', '-verify_return_error'])
     if mode == 'pqc':
         cmd.extend(['-groups', groups])
 

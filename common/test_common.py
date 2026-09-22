@@ -913,6 +913,127 @@ def test_session_uptime_tracking():
 
 
 
+def test_crl_flags_in_wrapper():
+    """start_tls_server adds -CRL/-crl_check/-verify_return_error only when the file exists."""
+    import tempfile
+    import common.openssl_wrapper as ow
+    calls = []
+
+    class FakeProc:
+        pid = 0
+
+    orig = ow.subprocess.Popen
+    ow.subprocess.Popen = lambda cmd, **kw: (calls.append(cmd), FakeProc())[1]
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.pem') as crl:
+            ow.start_tls_server('127.0.0.1', 1, 'c', 'k', 'ca', crl_path=crl.name)
+        ow.start_tls_server('127.0.0.1', 1, 'c', 'k', 'ca', crl_path='/nonexistent/crl.pem')
+        ow.start_tls_server('127.0.0.1', 1, 'c', 'k', 'ca')
+    finally:
+        ow.subprocess.Popen = orig
+    with_crl, missing, none = calls
+    test('CRL flags present when the file exists',
+         '-CRL' in with_crl and '-crl_check' in with_crl and '-verify_return_error' in with_crl)
+    test('CRL flags absent for a missing file / no crl_path',
+         '-CRL' not in missing and '-CRL' not in none)
+
+
+def test_hello_frame_and_disconnect_by_name():
+    """Client hello frame names the session; disconnect_by_name targets it."""
+    from common.framing import pack_hello, hello_name, unpack_frames, pack_keepalive
+    from server.session_manager import SessionManager
+
+    frames = list(unpack_frames(pack_hello('alice') + pack_keepalive()))
+    test('hello frame round-trips the name',
+         hello_name(*frames[0]) == 'alice' and hello_name(*frames[1]) is None)
+
+    mgr = SessionManager({'gateway': '10.8.0.1', 'max_clients': 3})
+    a = mgr.welcome_payload(); b = mgr.welcome_payload(); c = mgr.welcome_payload()
+    mgr.get(a['id']).name = 'alice'
+    mgr.get(b['id']).name = 'bob'
+    mgr.get(c['id']).name = 'alice'   # alice reconnected twice: both go
+    ids = mgr.disconnect_by_name('alice')
+    test('disconnect_by_name stops every session with that name',
+         sorted(ids) == sorted([a['id'], c['id']])
+         and mgr.get(a['id']).stop.is_set() and mgr.get(c['id']).stop.is_set()
+         and not mgr.get(b['id']).stop.is_set())
+    test('unknown name disconnects nothing', mgr.disconnect_by_name('mallory') == [])
+    test("snapshot carries the name", [x['name'] for x in mgr.snapshot()] == ['alice', 'bob', 'alice'])
+
+
+def test_revoked_client_rejected_real():
+    """Real PKI + real s_server: issue two clients, revoke one, and only the
+    other can complete the handshake and deliver a frame."""
+    import shutil
+    import tempfile
+    from common.framing import pack_frame, unpack_frames
+
+    pki_dir = os.path.join(PROJECT_DIR, 'pki')
+    with tempfile.TemporaryDirectory() as tmp:
+        # Private copy of the PKI scripts so the laptop's real CA DB is untouched.
+        work = os.path.join(tmp, 'pki')
+        shutil.copytree(pki_dir, work, ignore=shutil.ignore_patterns('certs'))
+        env = dict(os.environ)
+        run = lambda *a: subprocess.run(list(a), capture_output=True, text=True, env=env, cwd=tmp)
+        r = run('bash', os.path.join(work, 'gen_classical_ca.sh'))
+        assert r.returncode == 0, r.stderr[-400:]
+        for n in ('good', 'bad'):
+            r = run('bash', os.path.join(work, 'issue_client.sh'), 'classical', n)
+            assert r.returncode == 0, r.stderr[-400:]
+        r = run('bash', os.path.join(work, 'revoke_client.sh'), 'classical', 'bad')
+        assert r.returncode == 0, r.stderr[-400:]
+        cd = os.path.join(work, 'certs', 'classical')
+        crl = os.path.join(cd, 'crl.pem')
+        test('revoke_client.sh regenerated the CRL with one serial',
+             os.path.isfile(crl) and 'Serial Number' in run('openssl', 'crl', '-in', crl, '-noout', '-text').stdout)
+
+        def attempt(name, port):
+            server = start_tls_server('127.0.0.1', port, f'{cd}/server.crt', f'{cd}/server.key',
+                                      f'{cd}/ca.crt', mode='classical', crl_path=crl)
+            try:
+                client = None
+                cerr = ''
+                for _ in range(10):
+                    client = subprocess.Popen(
+                        ['openssl', 's_client', '-connect', f'127.0.0.1:{port}',
+                         '-cert', f'{cd}/clients/{name}.crt', '-key', f'{cd}/clients/{name}.key',
+                         '-CAfile', f'{cd}/ca.crt', '-quiet'],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    time.sleep(0.4)
+                    if client.poll() is None:
+                        break
+                    # A revoked client exits on the alert within this window;
+                    # keep its stderr — it is the evidence we assert on.
+                    cerr = client.stderr.read().decode(errors='replace')
+                    if 'Connection refused' not in cerr:
+                        break
+                    time.sleep(0.2)
+                try:
+                    client.stdin.write(pack_frame(b'payload-from-' + name.encode()))
+                    client.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    pass
+                time.sleep(1.0)
+                client.terminate()
+                cerr += client.stderr.read().decode(errors='replace')
+                try:
+                    server.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    server.kill()
+                got = server.stdout.read()
+                return cerr, list(unpack_frames(got))
+            finally:
+                if server.poll() is None:
+                    server.kill()
+
+        cerr, frames = attempt('bad', _free_port())
+        test('revoked client gets alert 44 and delivers nothing',
+             'certificate revoked' in cerr and frames == [])
+        cerr, frames = attempt('good', _free_port())
+        test('unrevoked client still relays through the same CRL',
+             frames == [(0, b'payload-from-good')] and 'revoked' not in cerr)
+
+
 if __name__ == '__main__':
     print('=== PQ-VPN Common Module Tests ===')
     print()
@@ -944,6 +1065,9 @@ if __name__ == '__main__':
     test_welcome_send_failure_releases_slot()
     test_welcome_limiter()
     test_session_uptime_tracking()
+    test_crl_flags_in_wrapper()
+    test_hello_frame_and_disconnect_by_name()
+    test_revoked_client_rejected_real()
     print()
     total = PASS + FAIL
     print(f'{PASS}/{total} passed' + (' ✅' if FAIL == 0 else ' ❌'))

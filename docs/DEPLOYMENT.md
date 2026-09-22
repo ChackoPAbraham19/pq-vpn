@@ -166,6 +166,24 @@ curl ifconfig.me                                             # => VPS IP
 
 Unlike the netns harness, leave `PQVPN_SKIP_DNS` unset so the pushed DNS is applied.
 
+### 6.4a Adding and banning clients
+
+Every client gets its **own** certificate from the CA database, so one can be
+revoked without touching the others:
+
+```bash
+# on the CA host (where pki/certs/pqc/ca.key lives)
+bash pki/issue_client.sh pqc laptop           # -> pki/certs/pqc/clients/laptop.{crt,key}
+# copy ca.crt + clients/laptop.{crt,key} to the client; set client_name: laptop
+
+bash pki/revoke_client.sh pqc laptop --kick   # CRL regenerated + live session ended
+bash scripts/deploy_vps.sh user@<VPS_IP>      # re-syncs pki/ (crl.pem) — no restart needed
+```
+
+The server loads `crl.pem` for every new session, so the ban holds from the
+client's next handshake (`alert certificate revoked`). `vpnctl status` and the
+dashboard show each tunnel's name.
+
 ### 6.4b ufw + security group
 
 ```bash

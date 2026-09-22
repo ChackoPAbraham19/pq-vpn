@@ -227,6 +227,7 @@ The sockets are created `0666` so a non-root `vpnctl`/dashboard can talk to root
 | Certs stored in plain | `pki/certs/` in `.gitignore`, never committed |
 | PQC cert fingerprinting | `-groups X25519MLKEM768` hides ML-KEM from non-PQC peer |
 | Compromised PKI | Both modes always require mutual TLS authentication: client and server both present certs |
+| Compromised / lost client key | Per-client certificates from a real CA database (`pki/issue_client.sh`); `pki/revoke_client.sh <mode> <name> [--kick]` adds it to `crl.pem`, which every new `s_server` loads (`-CRL -crl_check -verify_return_error`) so the next handshake fails with alert 44, and `--kick` ends the live session via `vpnctl disconnect-client`. No daemon restart. |
 | Network namespace-level censoring | `setup_routing.sh` creates isolated netns; no exposed interfaces except via defined rules |
 
 ### Limitations
@@ -246,8 +247,17 @@ The sockets are created `0666` so a non-root `vpnctl`/dashboard can talk to root
   A cached ticket from a previous server lifetime therefore never resumes
   (the handshake silently falls back to full). Status reports `resumed` only
   on hard evidence (cert exchange skipped), so it reads `false` across
-  restarts even with a populated ticket cache. Fixing this needs a persistent
-  ticket-key broker (Future Work).
+  restarts even with a populated ticket cache. This cannot be fixed with
+  `openssl s_server`: it exposes no way to load a ticket key (only
+  `-num_tickets`/`-no_ticket`; the key is random per process). The fix is a
+  small custom TLS server linked against the same OpenSSL that installs
+  `SSL_CTX_set_tlsext_ticket_key_evp_cb` with a key from a file — Future Work,
+  and the same change would enable mid-stream rekey (KeyUpdate).
+- **Revocation is file-based**: `crl.pem` is read when a session's `s_server`
+  starts, so a revoke applies to every *new* connection (and `--kick` ends the
+  current one). No CRL distribution points or OCSP; the CRL is shipped with the
+  PKI (`deploy_vps.sh` re-syncs `pki/`). The client's announced name is used for
+  display and targeted disconnects only — authorisation is the certificate + CRL.
 - Python GIL-bound CPU limit, ~700 Mbps TCP/UDP throughput measured (IP limits, not crypto)
 - NAT/dnsmasq/default-route plumbing is config-driven (`server/net_config.py`,
   `client/net_config.py`), validated via `--dry-run` unit tests and the live

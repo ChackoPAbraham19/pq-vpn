@@ -12,3 +12,4 @@ backoff_max: 30.0
 resume_cache: true
 instance: ns3
 handshake_timeout: 10
+client_name: ns3        # cert from pki/issue_client.sh <mode> ns3

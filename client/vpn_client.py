@@ -16,8 +16,8 @@ sys.path.insert(0, PROJECT_DIR)
 
 from common.tun_utils import create_tun, destroy_tun
 from common.openssl_wrapper import start_tls_client, parse_brief_line
-from common.framing import (pack_frame, pack_keepalive, unpack_config, validate_config,
-                            HEADER_LEN, TYPE_DATA)
+from common.framing import (pack_frame, pack_keepalive, pack_hello, unpack_config,
+                            validate_config, HEADER_LEN, TYPE_DATA)
 from common.daemon_utils import IpcServer, StatusTracker
 from common.ticket_cache import load_ticket, save_ticket_file
 from client.net_config import apply_tunnel_net, restore_tunnel_net
@@ -37,6 +37,14 @@ def parse_args():
 def load_config(config_path):
     with open(config_path) as f:
         return yaml.safe_load(f)
+
+
+def client_cert_paths(cert_dir: str, client_name: str) -> tuple[str, str]:
+    """Per-client cert issued by pki/issue_client.sh, or the legacy shared one."""
+    if client_name:
+        base = os.path.join(cert_dir, 'clients', client_name)
+        return base + '.crt', base + '.key'
+    return os.path.join(cert_dir, 'client.crt'), os.path.join(cert_dir, 'client.key')
 
 
 def welcome_handshake(server_host, server_port, timeout=5.0) -> int:
@@ -230,6 +238,8 @@ def run_session(config, args, stop, status):
     cert_dir = config.get('cert_dir', 'pki/certs/classical')
     mode = config.get('mode', 'classical')
     groups = config.get('groups', 'X25519MLKEM768')
+    client_name = str(config.get('client_name') or '')
+    cert_path, key_path = client_cert_paths(cert_dir, client_name)
 
     # Fresh attempt: drop any negotiated/resumed values from a previous tunnel
     # so status never shows stale data across reconnects.
@@ -269,8 +279,8 @@ def run_session(config, args, stop, status):
             tls_proc = start_tls_client(
                 host=config['server_host'],
                 port=data_port,
-                cert_path=os.path.join(cert_dir, 'client.crt'),
-                key_path=os.path.join(cert_dir, 'client.key'),
+                cert_path=cert_path,
+                key_path=key_path,
                 ca_path=os.path.join(cert_dir, 'ca.crt'),
                 mode=mode,
                 groups=groups,
@@ -316,7 +326,9 @@ def run_session(config, args, stop, status):
         # Ack immediately: the server only counts a session as connected once
         # it receives application data, and reaps silent slot claims after its
         # handshake_timeout — don't make it wait for the first 15s keepalive.
-        os.write(tls_stdin_fd, pack_keepalive())
+        # The ack carries our name (post-mTLS, so bound to our certificate) so
+        # the server can show it and target `vpnctl disconnect-client <name>`.
+        os.write(tls_stdin_fd, pack_hello(client_name) if client_name else pack_keepalive())
 
         print(f'[client] Opening TUN {tun_name} at {assigned_ip}/24...')
         try:

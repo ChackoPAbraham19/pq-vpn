@@ -65,6 +65,27 @@ def pack_keepalive() -> bytes:
 def is_keepalive(ftype: int, payload: bytes) -> bool:
     return ftype == TYPE_CONTROL and payload == KEEPALIVE
 
+
+HELLO_PREFIX = b'HELLO '  # control-frame payload: b'HELLO <client_name>'
+
+
+def pack_hello(name: str) -> bytes:
+    """Client -> server, first frame after the config-push: who I am.
+
+    Sent inside mTLS, so it is bound to the certificate the client just
+    proved it holds. The server uses it for display and targeted disconnects
+    only — never for authorisation (that is the CRL's job).
+    """
+    return pack_frame(HELLO_PREFIX + name.encode(), ftype=TYPE_CONTROL)
+
+
+def hello_name(ftype: int, payload: bytes) -> str | None:
+    """Return the client name from a hello control frame, else None."""
+    if ftype == TYPE_CONTROL and payload.startswith(HELLO_PREFIX):
+        name = payload[len(HELLO_PREFIX):].decode(errors='replace')
+        return name[:64] if name else None
+    return None
+
 def unpack_config(buffer: bytes):
     """Return (config_dict, remaining_buffer) from a stream head.
 

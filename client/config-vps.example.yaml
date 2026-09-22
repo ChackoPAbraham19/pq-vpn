@@ -20,3 +20,5 @@ backoff_min: 1.0
 backoff_max: 30.0
 resume_cache: true
 handshake_timeout: 10
+client_name: laptop          # issued on the CA host: bash pki/issue_client.sh pqc laptop
+                             # then copy pki/certs/pqc/{ca.crt,clients/laptop.crt,clients/laptop.key}

@@ -199,6 +199,15 @@
 - [x] README badge
 - [ ] First green run on GitHub after push
 
+## Phase 9: Per-client certificates + revocation [completed]
+- [x] `pki/ca.cnf` + `pki/_env.sh`: `openssl ca` database per PKI (index/serial/crlnumber), `default_md = default` so the ML-DSA CA signs CRLs
+- [x] `pki/issue_client.sh <mode> <name>` / `pki/revoke_client.sh <mode> <name> [--kick]`; `gen_*_ca.sh` create the DB, an empty CRL, and the default `client` cert (legacy `client.crt` kept as a copy)
+- [x] Server: every `s_server` gets `-CRL crl.pem -crl_check -verify_return_error` (fresh per session → revoke needs no restart); startup logs the revoked count
+- [x] Client: `client_name` → `clients/<name>.{crt,key}`; post-mTLS hello frame carries the name; `vpnctl status` + dashboard show it; `vpnctl disconnect-client <name>` / IPC `disconnect_client`
+- [x] `common/test_common.py` 71/71 incl. real s_server: revoked client → alert 44, nothing relayed; unrevoked client through the same CRL relays fine
+- [x] Item 3 (cross-restart resumption) deferred with the precise reason in architecture.md: `s_server` cannot load a ticket key → needs a custom TLS server
+- [ ] netns run: `revoke_client.sh pqc ns3 --kick` drops ns3, its reconnects log `certificate revoked`, `client` unaffected
+
 ## Phase 7b: Capstone — run on a real VPS (payment, LAST) [pending]
 - [ ] Buy x86 VPS (Ubuntu 24.04); `bash scripts/deploy_vps.sh user@<ip>`
 - [ ] Cloud security group: TCP 14430 + 14431–14433 from client IPs

@@ -16,7 +16,8 @@ sys.path.insert(0, PROJECT_DIR)
 
 from common.tun_utils import create_tun
 from common.openssl_wrapper import start_tls_server
-from common.framing import pack_frame, pack_config, unpack_frames, HEADER_LEN, TYPE_DATA
+from common.framing import (pack_frame, pack_config, unpack_frames, hello_name,
+                            HEADER_LEN, TYPE_DATA)
 from common.daemon_utils import IpcServer, StatusTracker
 from server.session_manager import SessionManager, WelcomeLimiter, ipv4_dst
 from server.net_config import setup_nat, teardown_nat, start_dnsmasq, stop_dnsmasq, drain_dnsmasq
@@ -87,6 +88,11 @@ def relay_tls_to_tun(tls_stdout_fd, tun_fd, session, status):
                     with session._lock:
                         session.bytes_in += length
                         status.bytes_in += length
+                elif not session.name:
+                    name = hello_name(ftype, buf[HEADER_LEN:frame_len])
+                    if name:
+                        session.name = name
+                        print(f'[server] client #{session.client_id} is "{name}"')
                 buf = buf[frame_len:]
         except (BrokenPipeError, OSError):
             break
@@ -129,6 +135,18 @@ def relay_tun_to_tls_loop(tun_fd, manager, status):
                 break
 
 
+def crl_serial_count(crl_path: str, mode: str) -> int:
+    """Number of revoked serials in a PEM CRL (for the startup log)."""
+    import subprocess
+    from common.openssl_wrapper import _make_env
+    try:
+        out = subprocess.run(['openssl', 'crl', '-in', crl_path, '-noout', '-text'],
+                             capture_output=True, text=True, env=_make_env(mode)).stdout
+    except OSError:
+        return 0
+    return out.count('Serial Number:')
+
+
 def idle_monitor(manager, idle_timeout, handshake_timeout, status, stop):
     """Teardown sessions that have been idle (no traffic/keepalive) too long,
     and slot claims whose client never completed mTLS within handshake_timeout.
@@ -163,6 +181,7 @@ def handle_client(conn, manager, config, status, cert_dir, mode, groups, tun_fd)
     cert_path = os.path.join(cert_dir, 'server.crt')
     key_path = os.path.join(cert_dir, 'server.key')
     ca_path = os.path.join(cert_dir, 'ca.crt')
+    crl_path = os.path.join(cert_dir, 'crl.pem')  # loaded fresh per session
     print(f'[server] client #{client_id} -> tun {session.ip}, data port {session.data_port}')
 
     # Start the per-client TLS listener BEFORE telling the client its port, so
@@ -175,6 +194,7 @@ def handle_client(conn, manager, config, status, cert_dir, mode, groups, tun_fd)
         ca_path=ca_path,
         mode=mode,
         groups=groups,
+        crl_path=crl_path,
     )
     status.tls_pid = session.tls_proc.pid
 
@@ -238,6 +258,14 @@ def main():
         groups = config.get('groups', 'X25519MLKEM768')
 
         print(f'[server] loading config from {config_path}, mode={mode}')
+        crl_file = os.path.join(cert_dir, 'crl.pem')
+        if os.path.isfile(crl_file):
+            n = crl_serial_count(crl_file, mode)
+            print(f'[server] CRL: {crl_file} ({n} revoked serial{"s" if n != 1 else ""}); '
+                  'checked on every new session')
+        else:
+            print(f'[server] no CRL at {crl_file}: revocation disabled '
+                  '(run pki/gen_*_ca.sh to create one)')
         print(f'[server] TUN name: {config.get("tun_name", "tun0")}')
         # create_tun (not open_tun_by_name): the server's tun0 MUST have its
         # address assigned and be brought UP — an unconfigured/down device
@@ -272,6 +300,13 @@ def main():
                 return {'ok': True}
             if cmd == 'clients':
                 return {'ok': True, 'clients': manager.snapshot()}
+            if cmd == 'disconnect_client':
+                name = payload.get('name')
+                ids = manager.disconnect_by_name(name) if isinstance(name, str) else []
+                if not ids:
+                    return {'ok': False, 'error': f'no connected client named {name!r}'}
+                print(f'[server] disconnected {name!r}: sessions {ids}')
+                return {'ok': True, 'client_ids': ids}
             if cmd == 'shutdown':
                 # Graceful daemon stop: the main loop's stop.wait wakes, and
                 # the finally block runs NAT/IPC teardown — unlike a SIGKILL,

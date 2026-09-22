@@ -61,6 +61,10 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
 - **Hardening** — welcome slot claims that never finish mTLS are reaped at 10 s; a
   per-source token bucket (1/s, burst 3) on the welcome port; the config push is
   validated before touching routes or DNS.
+- **Per-client certificates + revocation** — `pki/issue_client.sh` mints a cert per
+  client from a real CA database; `pki/revoke_client.sh <mode> <name> --kick` puts it
+  on the CRL every new session checks and ends the live tunnel. Works for both PKIs
+  (the CRL is ML-DSA-65-signed in PQC mode).
 - **Real networking** — NAT MASQUERADE + FORWARD rules, dnsmasq on the tunnel, default
   route via tun0 with a pinned `/32` transport route, DNS via `resolvectl` or
   `resolv.conf`, all restored on exit.
@@ -133,6 +137,8 @@ VPN/
 - **No mid-stream rekey** (`s_server` cannot renegotiate); reconnect re-handshakes.
 - **Welcome port** is unauthenticated by design; cost is bounded (10 s reap + rate
   limit) but a distributed flood could still fill 3 slots.
+- **Revocation is a file** (`crl.pem`, read per new session) — no OCSP / CRL
+  distribution points.
 - **Tested on one machine** (netns) and in Docker; the real-internet VPS run is the
   remaining roadmap item — [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) and
   `scripts/deploy_vps.sh` are ready for it.

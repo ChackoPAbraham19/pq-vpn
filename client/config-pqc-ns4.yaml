@@ -12,3 +12,4 @@ backoff_max: 30.0
 resume_cache: true
 instance: ns4
 handshake_timeout: 10
+client_name: ns4        # cert from pki/issue_client.sh <mode> ns4

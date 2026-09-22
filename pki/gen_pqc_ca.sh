@@ -1,24 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-export OPENSSL_CONF="${SCRIPT_DIR}/openssl-pqc.cnf"
-
-# ML-DSA keygen needs the custom OpenSSL (>=3.2 + oqs-provider). Put it on
-# PATH here so `bash pki/gen_pqc_ca.sh` works exactly as documented, without
-# the caller having to know about /opt/openssl-pqc.
-PQC_PREFIX="${PQC_PREFIX:-/opt/openssl-pqc}"
-if [ -x "${PQC_PREFIX}/bin/openssl" ]; then
-    export PATH="${PQC_PREFIX}/bin:${PATH}"
-    export LD_LIBRARY_PATH="${PQC_PREFIX}/lib64:${PQC_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
-fi
-
-CERT_DIR="${SCRIPT_DIR}/certs/pqc"   # pki/certs is git-ignored, so never cd into it
-DAYS=3650
-SUBJ_PREFIX="/C=US/ST=CA/O=PQ-VPN"
+# gen_pqc_ca.sh — ML-DSA-65 PKI: CA, server cert, CA database + empty CRL, and
+# the default client cert 'client' (issued via pki/issue_client.sh so it is
+# revocable). Needs the custom OpenSSL + oqs-provider (pki/_env.sh finds it).
+source "$(dirname "$0")/_env.sh" pqc
 CA_CN="${SUBJ_PREFIX}/CN=PQC-CA"
 SERVER_CN="${SUBJ_PREFIX}/CN=vpn-server"
-CLIENT_CN="${SUBJ_PREFIX}/CN=vpn-client"
 
 mkdir -p "${CERT_DIR}"
 
@@ -40,21 +27,19 @@ openssl req -new -newkey mldsa65 -keyout "${CERT_DIR}/server.key" \
 openssl x509 -req -in "${CERT_DIR}/server.csr" \
   -CA "${CERT_DIR}/ca.crt" -CAkey "${CERT_DIR}/ca.key" -CAcreateserial \
   -out "${CERT_DIR}/server.crt" -days "${DAYS}"
-rm -f "${CERT_DIR}/server.csr"
+rm -f "${CERT_DIR}/server.csr" "${CERT_DIR}/ca.srl"
 
-# --- Client ---
-openssl req -new -newkey mldsa65 -keyout "${CERT_DIR}/client.key" \
-  -out "${CERT_DIR}/client.csr" -nodes -subj "${CLIENT_CN}"
-openssl x509 -req -in "${CERT_DIR}/client.csr" \
-  -CA "${CERT_DIR}/ca.crt" -CAkey "${CERT_DIR}/ca.key" -CAcreateserial \
-  -out "${CERT_DIR}/client.crt" -days "${DAYS}"
-rm -f "${CERT_DIR}/client.csr"
-
-# --- Clean up serial file ---
-rm -f "${CERT_DIR}/ca.srl"
+# --- CA database + empty CRL + default client ---
+rm -rf "${CERT_DIR}/db" "${CERT_DIR}/clients"
+pki_init_db
+pki_gencrl
+bash "${PKI_DIR}/issue_client.sh" pqc client >/dev/null
+# Legacy paths (configs without client_name) point at the default client.
+cp "${CERT_DIR}/clients/client.crt" "${CERT_DIR}/client.crt"
+cp "${CERT_DIR}/clients/client.key" "${CERT_DIR}/client.key"
 
 # --- Verify ---
 echo "=== PQC PKI verification ==="
 openssl verify -CAfile "${CERT_DIR}/ca.crt" "${CERT_DIR}/server.crt"
-openssl verify -CAfile "${CERT_DIR}/ca.crt" "${CERT_DIR}/client.crt"
-echo "PQC certs ready: ${CERT_DIR}"
+openssl verify -CAfile "${CERT_DIR}/ca.crt" -CRLfile "${CERT_DIR}/crl.pem" -crl_check "${CERT_DIR}/client.crt"
+echo "PQC certs ready: ${CERT_DIR} (CRL: crl.pem, clients/: client)"

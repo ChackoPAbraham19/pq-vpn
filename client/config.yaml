@@ -11,3 +11,4 @@ backoff_min: 1.0
 backoff_max: 30.0
 resume_cache: true
 handshake_timeout: 10
+client_name: client     # default client issued by pki/gen_*_ca.sh

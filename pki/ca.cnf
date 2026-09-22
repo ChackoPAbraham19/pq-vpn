@@ -1,0 +1,40 @@
+# `openssl ca` configuration shared by both PKIs. CERT_DIR is exported by
+# pki/_env.sh (pki/certs/<mode>); the database lives under $CERT_DIR/db.
+[ca]
+default_ca = pqvpn
+
+[pqvpn]
+dir              = $ENV::CERT_DIR
+database         = $dir/db/index.txt
+serial           = $dir/db/serial
+crlnumber        = $dir/db/crlnumber
+new_certs_dir    = $dir/db/newcerts
+certificate      = $dir/ca.crt
+private_key      = $dir/ca.key
+default_days     = 3650
+default_crl_days = 30
+# "default" lets the key type pick the digest: required for ML-DSA (no
+# separate hash), harmless for ECDSA (sha256).
+default_md       = default
+unique_subject   = no
+policy           = pol_client
+x509_extensions  = leaf
+copy_extensions  = none
+
+[pol_client]
+commonName          = supplied
+countryName         = optional
+stateOrProvinceName = optional
+organizationName    = optional
+
+# Leaf (client) certificate extensions.
+[leaf]
+basicConstraints       = CA:FALSE
+keyUsage               = critical, digitalSignature
+extendedKeyUsage       = clientAuth
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid
+
+[req]
+distinguished_name = req_dn
+[req_dn]

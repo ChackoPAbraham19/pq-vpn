@@ -64,6 +64,13 @@ check_offline() {
         [[ -f "$f" ]] || { fail "missing config: $f"; rc=1; }
     done
     [[ -d "$PDIR/pki/certs/$MODE" ]] || { fail "PKI not generated for $MODE (run pki/gen_*_ca.sh)"; rc=1; }
+    # Per-client certs for the extra namespaces (configs carry client_name: ns3/ns4).
+    if [[ -f "$PDIR/pki/certs/$MODE/ca.key" ]]; then
+        for n in ns3 ns4; do
+            [[ -f "$PDIR/pki/certs/$MODE/clients/$n.crt" ]] \
+                || bash "$PDIR/pki/issue_client.sh" "$MODE" "$n" >/dev/null
+        done
+    fi
     if [[ "$MODE" == "pqc" ]]; then
         [[ -x /opt/openssl-pqc/bin/openssl ]] || { fail "missing /opt/openssl-pqc (run scripts/install_custom_openssl.sh)"; rc=1; }
     fi

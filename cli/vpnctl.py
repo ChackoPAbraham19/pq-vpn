@@ -278,12 +278,33 @@ def _print_status(label: str, s: dict):
     if clients:
         click.echo(f'  {"Clients":<{width}}')
         for c in clients:
+            name = c.get('name') or '-'
             click.echo(
-                f'    # {c.get("id")}  {c.get("ip")}  '
+                f'    # {c.get("id")}  {name:<10} {c.get("ip")}  '
                 f'port {c.get("port")}  in {_fmt_bytes(c.get("bytes_in", 0))}  '
                 f'out {_fmt_bytes(c.get("bytes_out", 0))}'
             )
     click.echo()
+
+
+@cli.command('disconnect-client')
+@click.argument('name')
+def disconnect_client(name: str):
+    """Force-disconnect the connected client(s) that announced NAME.
+
+    Pair with `pki/revoke_client.sh <mode> <name>`: the CRL blocks the next
+    handshake, this ends the session that is already up.
+    """
+    try:
+        reply = ipc_request('server', json.dumps({'cmd': 'disconnect_client', 'name': name}))
+    except (OSError, ValueError) as e:
+        click.echo(f'Server not reachable ({e}).', err=True)
+        sys.exit(1)
+    inner = reply.get('result') if isinstance(reply, dict) else None
+    if not isinstance(inner, dict) or not inner.get('ok'):
+        click.echo((inner or {}).get('error', 'failed') if isinstance(inner, dict) else 'failed', err=True)
+        sys.exit(1)
+    click.echo(f'Disconnected {name!r}: session(s) {inner.get("client_ids")}')
 
 
 @cli.command()

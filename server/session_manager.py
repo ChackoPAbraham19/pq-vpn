@@ -145,6 +145,7 @@ class ClientSession:
         # Set once the first TLS application-data chunk arrives, i.e. the
         # client completed mTLS. Until then the session is only a slot claim.
         self.connected = False
+        self.name = ''     # from the client's post-mTLS hello frame (display only)
         self._lock = threading.Lock()
 
     def touch(self):
@@ -173,6 +174,7 @@ class ClientSession:
             'bytes_in': self.bytes_in,
             'bytes_out': self.bytes_out,
             'connected': self.connected,
+            'name': self.name,
             'idle_seconds': round(self.idle_seconds(), 1),
         }
 
@@ -300,6 +302,18 @@ class SessionManager:
             except ProcessLookupError:
                 pass
         return True
+
+    def disconnect_by_name(self, name: str) -> list[int]:
+        """Force-teardown every session that announced `name`. Returns ids.
+
+        Used after a certificate revocation: the CRL stops the next handshake,
+        this stops the session that is already up.
+        """
+        with self._lock:
+            targets = [s for s in self.sessions.values() if s.name == name]
+        for session in targets:
+            self.disconnect(session.client_id)
+        return [s.client_id for s in targets]
 
     def route_client_for(self, dst_ip: ipaddress.IPv4Address):
         """Return the session whose tunnel IP matches dst_ip, or None."""

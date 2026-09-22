@@ -65,7 +65,7 @@
   <section class="panel">
     <h2>Active Tunnels</h2>
     <table>
-      <thead><tr><th>#</th><th>IP</th><th>Port</th><th>Idle</th><th class="num">In</th><th class="num">Out</th><th class="num">In kB/s</th><th class="num">Out kB/s</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Name</th><th>IP</th><th>Port</th><th>Idle</th><th class="num">In</th><th class="num">Out</th><th class="num">In kB/s</th><th class="num">Out kB/s</th><th></th></tr></thead>
       <tbody id="tunnels"></tbody>
     </table>
     <p class="muted" id="tunnels-empty">no clients connected</p>
@@ -175,6 +175,7 @@ function renderTunnels(clients, now) {
     return `
     <tr>
       <td>#${esc(c.id)}</td>
+      <td>${esc(c.name || '—')}</td>
       <td>${esc(c.ip)}</td>
       <td>${esc(c.port)}</td>
       <td>${esc(c.idle_seconds)}s</td>
