@@ -69,6 +69,7 @@ class StatusTracker:
                 'resumed': self.resumed,
                 'negotiated': dict(self.negotiated),
                 'groups': self.config.get('groups', 'X25519MLKEM768'),
+                'max_clients': int(self.config.get('max_clients', 3)),
                 'clients': list(self.clients),
             }
 

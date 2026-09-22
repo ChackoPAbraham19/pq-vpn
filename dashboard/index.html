@@ -4,298 +4,450 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PQ-VPN Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #0f172a; --panel: #1e293b; --border: #334155;
-    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
-    --good: #34d399; --warn: #fbbf24; --bad: #f87171;
+    color-scheme: dark;
+    --page: #0f131c;
+    --panel: #161b26;
+    --raised: #1f2634;
+    --line: #2a3344;
+    --line-soft: #222a39;
+    --ink: #e9e6dd;
+    --ink-2: #9aa3b5;
+    --ink-3: #667089;
+    --to-server: #3987e5;    /* clients -> server */
+    --to-clients: #d95926;   /* server -> clients */
+    --good: #0ca30c;
+    --warn: #fab219;
+    --bad: #d03b3b;
+    --font: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; padding: 20px; }
-  header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
-  h1 { font-size: 20px; }
-  .pill { padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; background: var(--panel); border: 1px solid var(--border); }
-  .pill.ok { color: var(--good); } .pill.mid { color: var(--warn); } .pill.down { color: var(--bad); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
-  .panel h2 { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
-  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
-  .kv dt { color: var(--muted); } .kv dd { text-align: right; font-variant-numeric: tabular-nums; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 500; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font-size: 12px; }
-  .btn:hover { border-color: var(--accent); color: var(--accent); }
-  #log { list-style: none; max-height: 200px; overflow-y: auto; font-size: 12px; font-family: ui-monospace, monospace; }
-  #log li { padding: 2px 0; border-bottom: 1px dashed var(--border); color: var(--muted); }
-  .chart-wrap { position: relative; height: 220px; }
-  .muted { color: var(--muted); }
-  .token { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; }
-  .token input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; width: 260px; max-width: 60vw; }
-  .client-card { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
-  .client-card:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
-  .client-card h3 { font-size: 13px; margin-bottom: 4px; }
+  html { background: var(--page); }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 15px/1.5 var(--font); font-optical-sizing: auto;
+    font-variant-numeric: tabular-nums;
+    padding: 24px clamp(16px, 3vw, 40px) 48px;
+    min-height: 100vh;
+  }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--to-server); outline-offset: 2px; border-radius: 4px; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap;
+    padding-bottom: 18px; border-bottom: 1px solid var(--line);
+  }
+  .brand { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .brand small { font-weight: 400; color: var(--ink-3); margin-left: 8px; font-size: 14px; }
+  .status-line { display: flex; align-items: center; gap: 10px; color: var(--ink-2); font-size: 15px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ink-3); flex: none; }
+  .dot.up { background: var(--good); }
+  .dot.mid { background: var(--warn); }
+  .dot.down { background: var(--bad); }
+  .dot.changed { animation: pulse 900ms ease-out 1; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(233,230,221,.5);} 100% { box-shadow: 0 0 0 12px rgba(233,230,221,0);} }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .token { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 14px; }
+  .token input {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 10px; width: 230px; max-width: 55vw; font: inherit; font-size: 14px;
+  }
+  .token input::placeholder { color: var(--ink-3); }
+  .clock { color: var(--ink-3); font-size: 14px; }
+
+  /* ---------- layout ---------- */
+  .grid { display: grid; grid-template-columns: minmax(300px, 5fr) minmax(320px, 7fr); gap: 24px; margin-top: 24px; }
+  .span { grid-column: 1 / -1; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  section { min-width: 0; }
+  section.panel { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; padding: 20px 22px; }
+  section.flat { padding: 22px 0 0; border-top: 1px solid var(--line); }
+  section > h2 { font-size: 15px; font-weight: 500; color: var(--ink-2); margin-bottom: 14px; }
+  section > h2 span { color: var(--ink-3); font-weight: 400; }
+
+  /* ---------- hero: negotiated suite ---------- */
+  .hero { display: flex; flex-direction: column; gap: 0; }
+  .mode-tag {
+    display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
+    padding: 4px 12px 4px 8px; border-radius: 999px; border: 1px solid var(--line);
+    font-size: 13px; color: var(--ink-2); margin-bottom: 18px;
+  }
+  .mode-tag b { font-weight: 600; color: var(--ink); }
+  .mode-tag .dot { width: 8px; height: 8px; }
+  .suite { display: grid; grid-template-columns: auto 1fr; column-gap: 18px; row-gap: 14px; align-items: baseline; }
+  .suite dt { color: var(--ink-3); font-size: 14px; white-space: nowrap; }
+  .suite dd { min-width: 0; }
+  .suite .val {
+    font-family: var(--mono); font-size: clamp(18px, 2.4vw, 26px); font-weight: 500; line-height: 1.15;
+    letter-spacing: -0.01em; overflow-wrap: anywhere;
+  }
+  .suite .val.pq { color: var(--ink); }
+  .suite .why { color: var(--ink-2); font-size: 14px; margin-top: 3px; }
+  .hero-foot { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line-soft); color: var(--ink-2); font-size: 14px; }
+  .hero-foot b { color: var(--ink); font-weight: 500; }
+  .empty { color: var(--ink-2); font-size: 15px; line-height: 1.6; }
+  .empty code { font-family: var(--mono); font-size: 13px; background: var(--raised); padding: 2px 6px; border-radius: 4px; }
+
+  /* ---------- throughput ---------- */
+  .chart-head { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin-bottom: 8px; }
+  .chart-head h2 { margin: 0; }
+  .legend { display: flex; gap: 16px; font-size: 14px; color: var(--ink-2); margin-left: auto; }
+  .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; border-radius: 1px; }
+  .now { display: flex; gap: 28px; margin: 4px 0 12px; flex-wrap: wrap; }
+  .now div { line-height: 1.2; }
+  .now .n { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; }
+  .now .n small { font-size: 14px; font-weight: 400; color: var(--ink-2); margin-left: 4px; }
+  .now .l { color: var(--ink-2); font-size: 14px; margin-top: 2px; }
+  .chart-wrap { position: relative; height: 210px; }
+
+  /* ---------- tunnels ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th { text-align: left; color: var(--ink-3); font-weight: 500; padding: 4px 10px 10px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 11px 10px 11px 0; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  th.num, td.num { text-align: right; white-space: nowrap; }
+  td.id { color: var(--ink-3); width: 44px; }
+  td.name { font-weight: 600; white-space: nowrap; }
+  td.name .st { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+  td.addr { font-family: var(--mono); font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+  td.spark canvas { width: 120px; height: 28px; display: block; }
+  td.share { width: 160px; }
+  .bar { position: relative; height: 6px; background: var(--raised); border-radius: 3px; overflow: hidden; }
+  .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--to-server); border-radius: 3px; }
+  .bar i.o { background: var(--to-clients); }
+  .share-l { color: var(--ink-3); font-size: 12px; margin-top: 4px; }
+  .btn {
+    padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: transparent;
+    color: var(--ink-2); cursor: pointer; font: inherit; font-size: 13.5px;
+  }
+  .btn:hover { border-color: var(--bad); color: var(--ink); }
+  .table-wrap { overflow-x: auto; }
+  .table-empty { color: var(--ink-2); padding: 8px 0 2px; }
+  .table-empty code { font-family: var(--mono); font-size: 13px; }
+
+  /* ---------- client daemons ---------- */
+  .clients { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .client { border: 1px solid var(--line-soft); border-radius: 10px; padding: 14px 16px; background: var(--page); }
+  .client h3 { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .client h3 .state { margin-left: auto; font-weight: 400; color: var(--ink-2); font-size: 14px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; font-size: 14px; }
+  .kv dt { color: var(--ink-3); }
+  .kv dd { color: var(--ink); text-align: right; white-space: nowrap; }
+  .kv dd.m { font-family: var(--mono); font-size: 13px; }
+
+  /* ---------- events ---------- */
+  #log { list-style: none; max-height: 220px; overflow-y: auto; font-size: 14px; }
+  #log li { display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+  #log li:last-child { border-bottom: 0; }
+  #log time { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  #log li.warn span { color: var(--warn); }
+  #log li.bad span { color: #f08a8a; }
 </style>
 </head>
 <body>
 <header>
-  <h1>🛡 PQ-VPN Dashboard</h1>
-  <span class="pill" id="server-pill">server —</span>
-  <span class="pill" id="client-pill">clients —</span>
-  <span class="muted" id="updated"></span>
-  <label class="token">
-    <span class="muted">token</span>
-    <input id="token" type="password" placeholder="X-PQVPN-Token (printed by dashboard_server)" autocomplete="off">
-  </label>
+  <div class="brand">PQ-VPN <small>tunnel operations</small></div>
+  <div class="status-line"><span class="dot" id="dot"></span><span id="status-line">connecting to the dashboard server…</span></div>
+  <div class="header-right">
+    <label class="token"><span>Token</span>
+      <input id="token" type="password" placeholder="paste what dashboard_server printed" autocomplete="off"></label>
+    <span class="clock" id="clock"></span>
+  </div>
 </header>
 
 <div class="grid">
-  <section class="panel">
-    <h2>Server</h2>
-    <dl class="kv" id="server-kv"></dl>
+  <section class="panel hero" aria-labelledby="hero-h">
+    <h2 id="hero-h">Negotiated for this session <span id="hero-who"></span></h2>
+    <div id="hero-body"></div>
   </section>
 
-  <section class="panel">
-    <h2>Clients</h2>
-    <div id="clients"></div>
+  <section class="panel" aria-labelledby="tp-h">
+    <div class="chart-head">
+      <h2 id="tp-h">Throughput <span>last 60 s</span></h2>
+      <div class="legend"><span><i style="background:var(--to-server)"></i>clients to server</span><span><i style="background:var(--to-clients)"></i>server to clients</span></div>
+    </div>
+    <div class="now">
+      <div><div class="n" id="now-in">0<small>MB/s</small></div><div class="l">clients to server</div></div>
+      <div><div class="n" id="now-out">0<small>MB/s</small></div><div class="l">server to clients</div></div>
+      <div><div class="n" id="total-bytes">0<small>B</small></div><div class="l">moved since server start</div></div>
+    </div>
+    <div class="chart-wrap"><canvas id="tp"></canvas></div>
   </section>
 
-  <section class="panel">
-    <h2>Active Tunnels</h2>
-    <table>
-      <thead><tr><th>#</th><th>Name</th><th>IP</th><th>Port</th><th>Idle</th><th class="num">In</th><th class="num">Out</th><th class="num">In kB/s</th><th class="num">Out kB/s</th><th></th></tr></thead>
-      <tbody id="tunnels"></tbody>
-    </table>
-    <p class="muted" id="tunnels-empty">no clients connected</p>
+  <section class="span flat" aria-labelledby="tun-h">
+    <h2 id="tun-h">Tunnels <span id="tun-count"></span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Client</th><th>Tunnel address</th><th>Last 15 s</th><th class="num">Rate</th><th>Share of traffic</th><th class="num">Moved</th><th class="num">Idle</th><th></th></tr></thead>
+        <tbody id="tunnels"></tbody>
+      </table>
+      <p class="table-empty" id="tunnels-empty">No tunnels. Start a client with <code>vpn_client.py</code> and it appears here within a second.</p>
+    </div>
   </section>
 
-  <section class="panel">
-    <h2>Throughput (kB/s)</h2>
-    <div class="chart-wrap"><canvas id="throughput-chart"></canvas></div>
+  <section class="flat" aria-labelledby="cd-h">
+    <h2 id="cd-h">Client daemons on this machine</h2>
+    <div class="clients" id="clients"></div>
   </section>
 
-  <section class="panel">
-    <h2>Handshake Mode</h2>
-    <div class="chart-wrap"><canvas id="handshake-chart"></canvas></div>
-    <p class="muted" id="resume-note"></p>
-  </section>
-
-  <section class="panel">
-    <h2>Event Log</h2>
+  <section class="flat" aria-labelledby="ev-h">
+    <h2 id="ev-h">Events</h2>
     <ul id="log"></ul>
   </section>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
-const MB = 1024 * 1024;
-const KB = 1024;
-const fmt = n => {
-  if (n >= MB) return (n / MB).toFixed(2) + ' MB';
-  if (n >= KB) return (n / KB).toFixed(1) + ' kB';
-  return n + ' B';
-};
-const fmtRate = bps => {
-  const k = bps / KB;
-  if (k >= 1000) return (k / 1024).toFixed(2) + ' MB/s';
-  return k.toFixed(1) + ' kB/s';
-};
-const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const KB = 1024, MB = KB * 1024, GB = MB * 1024;
+const fmtBytes = n => n >= GB ? (n / GB).toFixed(2) + ' GB' : n >= MB ? (n / MB).toFixed(1) + ' MB' : n >= KB ? (n / KB).toFixed(0) + ' kB' : n + ' B';
+const fmtRate = bps => bps >= MB ? (bps / MB).toFixed(1) + ' MB/s' : (bps / KB).toFixed(0) + ' kB/s';
+const fmtDur = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
+const MAX_POINTS = 120;   // 60 s at the 0.5 s poll
+const hms = (d = new Date()) => d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-let prev = null;                 // aggregate byte counters from the last snapshot
-let perClient = new Map();       // client id -> {t, in, out} for per-tunnel rates
-let speedHistory = { in: [], out: [] };
-const MAX_POINTS = 60;
+// ---------- events
 const log = $('log');
-function pushLog(msg) {
+function event(msg, kind) {
   const li = document.createElement('li');
-  const t = new Date().toLocaleTimeString();
-  li.textContent = `${t}  ${msg}`;
-  log.prepend(li);
-  while (log.children.length > 80) log.removeChild(log.lastChild);
+  if (kind) li.className = kind;
+  const t = document.createElement('time'); t.textContent = hms();
+  const sp = document.createElement('span'); sp.textContent = msg;
+  li.append(t, sp); log.prepend(li);
+  while (log.children.length > 120) log.removeChild(log.lastChild);
 }
 
-// Dashboard token: never served by the app; the user pastes what
-// dashboard_server printed. Kept per-browser in localStorage (best effort).
+// ---------- token (never served by the app; kept per browser)
 const tokenInput = $('token');
 try { tokenInput.value = localStorage.getItem('pqvpn-dash-token') || ''; } catch (e) {}
-tokenInput.addEventListener('change', () => {
-  try { localStorage.setItem('pqvpn-dash-token', tokenInput.value); } catch (e) {}
+tokenInput.addEventListener('change', () => { try { localStorage.setItem('pqvpn-dash-token', tokenInput.value); } catch (e) {} });
+
+// ---------- hero: negotiated suite
+const KEX = {
+  X25519MLKEM768: ['X25519 + ML-KEM-768 hybrid key exchange', 'quantum-safe, FIPS 203'],
+  X25519: ['X25519 elliptic-curve key exchange', 'classical'],
+};
+const SIG = {
+  mldsa65: ['ML-DSA-65 lattice signature', 'quantum-safe, FIPS 204'],
+  ecdsa: ['ECDSA P-256 signature', 'classical'],
+};
+function describe(map, v) { const lv = (v || '').toLowerCase(); for (const k in map) if (lv.includes(k.toLowerCase())) return map[k]; return [v || '', '']; }
+
+function renderHero(s) {
+  const clients = s.clients || [];
+  const c = clients.find(x => x.state === 'connected' && x.negotiated && Object.keys(x.negotiated).length) || clients[0];
+  const who = $('hero-who');
+  const body = $('hero-body');
+  if (!c) {
+    who.textContent = '';
+    const srv = s.server;
+    const tail = srv ? (srv.clients && srv.clients.length ? ` The server is up with ${srv.clients.length} tunnel${srv.clients.length === 1 ? '' : 's'} from other machines.` : ' The server is up and waiting for clients.') : '';
+    body.innerHTML = `<p class="empty">No client daemon is running on this machine, so there is no handshake to show.${tail}<br>Start one with <code>sudo .venv/bin/python3 client/vpn_client.py --config client/config-pqc.yaml</code></p>`;
+    return;
+  }
+  const n = c.negotiated || {};
+  const mode = c.mode;
+  const pq = mode === 'pqc';
+  const pending = c.state !== 'connected';
+  const group = n.kex || n.group_offered || c.groups || '';
+  const sig = n.sig_type || (pending ? '' : (pq ? 'mldsa65' : 'ecdsa'));
+  const [kexText, kexWhy] = describe(KEX, group);
+  const [sigText, sigWhy] = describe(SIG, sig);
+  who.textContent = c._instance ? `by client[${c._instance}]` : (clients.length > 1 ? 'by the first client' : '');
+  body.innerHTML = `
+    <div class="mode-tag"><span class="dot ${pq ? 'up' : ''}"></span>${pq ? '<b>Post-quantum</b> mode' : '<b>Classical</b> mode'}${pending ? ', handshake in progress' : ''}</div>
+    <dl class="suite">
+      <dt>Protocol</dt><dd><div class="val">${esc(n.protocol || (pending ? '…' : 'TLSv1.3'))}</div></dd>
+      <dt>Key exchange</dt><dd><div class="val ${pq ? 'pq' : ''}">${esc(group || '…')}</div><div class="why">${esc(kexText)}${kexWhy ? ', ' + esc(kexWhy) : ''}</div></dd>
+      <dt>Signature</dt><dd><div class="val ${pq ? 'pq' : ''}">${esc(sig || '…')}</div><div class="why">${esc(sigText)}${sigWhy ? ', ' + esc(sigWhy) : ''}</div></dd>
+      <dt>Cipher</dt><dd><div class="val" style="font-size:16px;color:var(--ink-2)">${esc(n.cipher || '…')}</div></dd>
+    </dl>
+    <div class="hero-foot">${c.resumed ? '<b>Resumed</b> from a cached session ticket.' : 'Full handshake: the certificate exchange ran.'}${c.session_seconds ? ` Tunnel up for <b>${fmtDur(c.session_seconds)}</b>.` : ''}</div>`;
+}
+
+// ---------- throughput
+const tp = new Chart($('tp'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    { label: 'clients to server', data: [], borderColor: css('--to-server'), borderWidth: 2, pointRadius: 0, pointHitRadius: 12, tension: 0.25 },
+    { label: 'server to clients', data: [], borderColor: css('--to-clients'), borderWidth: 2, pointRadius: 0, pointHitRadius: 12, tension: 0.25 },
+  ]},
+  options: {
+    animation: false, responsive: true, maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: css('--raised'), titleColor: css('--ink-2'), bodyColor: css('--ink'), borderColor: css('--line'), borderWidth: 1,
+        padding: 10, displayColors: true, boxWidth: 8, boxHeight: 8, usePointStyle: true,
+        callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtRate(ctx.parsed.y)}` },
+      },
+    },
+    scales: {
+      x: { ticks: { color: css('--ink-3'), maxTicksLimit: 6, font: { family: css('--font'), size: 12 } }, grid: { display: false }, border: { color: css('--line') } },
+      y: { beginAtZero: true, ticks: { color: css('--ink-3'), maxTicksLimit: 5, font: { family: css('--font'), size: 12 }, callback: v => fmtRate(v) },
+           grid: { color: css('--line-soft') }, border: { display: false } },
+    },
+  },
 });
-
-function pill(el, state, label) {
-  el.textContent = label;
-  el.className = 'pill ' + (state === 'connected' || state === 'ok' ? 'ok' : state === 'reconnecting' || state === 'handshake-in-progress' ? 'mid' : 'down');
+let prev = null;        // aggregate counters at the last snapshot
+function aggregate(s) {
+  if (s.server) return { in: s.server.bytes_in, out: s.server.bytes_out };
+  if (s.clients && s.clients.length) return s.clients.reduce((a, c) => ({ in: a.in + c.bytes_out, out: a.out + c.bytes_in }), { in: 0, out: 0 });
+  return null;
+}
+function updateThroughput(s, now) {
+  const agg = aggregate(s);
+  let rin = 0, rout = 0;
+  if (prev && agg) { const dt = Math.max((now - prev.t) / 1000, 0.01); rin = Math.max(0, (agg.in - prev.in) / dt); rout = Math.max(0, (agg.out - prev.out) / dt); }
+  prev = agg ? { t: now, in: agg.in, out: agg.out } : null;
+  const d = tp.data;
+  d.labels.push(new Date(now).toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' }));
+  d.datasets[0].data.push(rin); d.datasets[1].data.push(rout);
+  if (d.labels.length > MAX_POINTS) { d.labels.shift(); d.datasets.forEach(ds => ds.data.shift()); }
+  tp.update('none');
+  $('now-in').innerHTML = `${(rin / MB).toFixed(1)}<small>MB/s</small>`;
+  $('now-out').innerHTML = `${(rout / MB).toFixed(1)}<small>MB/s</small>`;
+  const total = agg ? agg.in + agg.out : 0;
+  const [num, unit] = fmtBytes(total).split(' ');
+  $('total-bytes').innerHTML = `${esc(num)}<small>${esc(unit)}</small>`;
 }
 
-function kvRows(s) {
-  return [
-    ['State', s.state],
-    ['Mode', s.mode],
-    ['Groups', s.groups],
-    ['TUN', `${s.tun_name} ${s.tun_addr}`],
-    ['Session', s.resumed ? 'resumed (ticket)' : 'full'],
-    ['Uptime', s.uptime_seconds + 's' + (s.session_seconds ? ` (session ${s.session_seconds}s)` : '')],
-  ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+// ---------- tunnels
+const perClient = new Map();   // id -> { t, in, out, hist: [] }
+function sparkline(canvas, hist, color) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = 120, h = 28;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const g = canvas.getContext('2d'); g.scale(dpr, dpr);
+  g.clearRect(0, 0, w, h);
+  if (hist.length < 2) return;
+  const max = Math.max(...hist, 1);
+  g.strokeStyle = color; g.lineWidth = 1.5; g.lineJoin = 'round'; g.beginPath();
+  hist.forEach((v, i) => { const x = i / (hist.length - 1) * (w - 2) + 1; const y = h - 2 - (v / max) * (h - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.stroke();
 }
-
-function renderKv(el, s) {
-  if (!s) { el.innerHTML = '<dt class="muted">—</dt><dd class="muted">not running</dd>'; return; }
-  el.innerHTML = kvRows(s);
-}
-
-function renderClients(clients) {
-  const el = $('clients');
-  if (!clients || !clients.length) { el.innerHTML = '<p class="muted">no client daemon running</p>'; return; }
-  el.innerHTML = clients.map(c => `
-    <div class="client-card">
-      <h3>Client${c._instance ? `[${esc(c._instance)}]` : ''} <span class="muted">· ${esc(c.state)}</span></h3>
-      <dl class="kv">${kvRows(c)}</dl>
-    </div>`).join('');
-}
-
-function rate(prevEntry, nowEntry, dt) {
-  if (!prevEntry) return [0, 0];
-  return [(nowEntry.in - prevEntry.in) / dt / KB, (nowEntry.out - prevEntry.out) / dt / KB];
-}
-
-function renderTunnels(clients, now) {
+function renderTunnels(server, now) {
+  const clients = (server && server.clients) || [];
   const tbody = $('tunnels');
-  $('tunnels-empty').style.display = (clients && clients.length) ? 'none' : '';
+  $('tunnels-empty').hidden = clients.length > 0;
+  $('tun-count').textContent = clients.length ? `${clients.length} of ${server.max_clients || 3} slots` : '';
+  const total = clients.reduce((a, c) => a + c.bytes_in + c.bytes_out, 0) || 1;
   const seen = new Set();
-  tbody.innerHTML = (clients || []).map(c => {
+  tbody.innerHTML = clients.map(c => {
     seen.add(c.id);
-    const cur = { t: now, in: c.bytes_in, out: c.bytes_out };
-    const was = perClient.get(c.id);
-    const dt = was ? Math.max((now - was.t) / 1000, 0.01) : 1;
-    const [rIn, rOut] = rate(was, cur, dt);
-    perClient.set(c.id, cur);
-    return `
-    <tr>
-      <td>#${esc(c.id)}</td>
-      <td>${esc(c.name || '—')}</td>
-      <td>${esc(c.ip)}</td>
-      <td>${esc(c.port)}</td>
-      <td>${esc(c.idle_seconds)}s</td>
-      <td class="num">${esc(fmt(c.bytes_in))}</td>
-      <td class="num">${esc(fmt(c.bytes_out))}</td>
-      <td class="num">${rIn.toFixed(1)}</td>
-      <td class="num">${rOut.toFixed(1)}</td>
-      <td><button class="btn" data-kick="${esc(c.id)}">kick</button></td>
+    const was = perClient.get(c.id) || { t: now, in: c.bytes_in, out: c.bytes_out, hist: [] };
+    const dt = Math.max((now - was.t) / 1000, 0.01);
+    const rate = perClient.has(c.id) ? Math.max(0, (c.bytes_in + c.bytes_out - was.in - was.out) / dt) : 0;
+    const hist = was.hist.concat(rate).slice(-30);
+    perClient.set(c.id, { t: now, in: c.bytes_in, out: c.bytes_out, hist });
+    const shareIn = c.bytes_in / total * 100, shareOut = c.bytes_out / total * 100;
+    const stale = c.idle_seconds > 20;
+    const stColor = c.connected ? (stale ? 'var(--warn)' : 'var(--good)') : 'var(--ink-3)';
+    const stTitle = c.connected ? (stale ? `no traffic or keepalive for ${c.idle_seconds} s` : 'connected') : 'handshake not finished';
+    return `<tr>
+      <td class="id">${esc(c.id)}</td>
+      <td class="name"><span class="st" style="background:${stColor}" title="${esc(stTitle)}"></span>${esc(c.name || 'unnamed')}</td>
+      <td class="addr">${esc(c.ip)}<span style="color:var(--ink-3)">:${esc(c.port)}</span></td>
+      <td class="spark"><canvas data-spark="${esc(c.id)}" width="120" height="28" aria-label="rate over the last 15 seconds"></canvas></td>
+      <td class="num">${esc(fmtRate(rate))}</td>
+      <td class="share"><div class="bar"><i style="width:${shareIn.toFixed(1)}%"></i><i class="o" style="left:${shareIn.toFixed(1)}%;width:${shareOut.toFixed(1)}%"></i></div><div class="share-l">${(shareIn + shareOut).toFixed(0)}% of all bytes</div></td>
+      <td class="num">${esc(fmtBytes(c.bytes_in + c.bytes_out))}</td>
+      <td class="num" style="color:${stale ? 'var(--warn)' : 'var(--ink-2)'}">${esc(c.idle_seconds)} s</td>
+      <td><button class="btn" data-disconnect="${esc(c.id)}" data-name="${esc(c.name || '#' + c.id)}">Disconnect</button></td>
     </tr>`;
   }).join('');
   for (const id of [...perClient.keys()]) if (!seen.has(id)) perClient.delete(id);
-  tbody.querySelectorAll('button[data-kick]').forEach(b => b.onclick = () => kick(Number(b.dataset.kick)));
+  tbody.querySelectorAll('canvas[data-spark]').forEach(cv => sparkline(cv, perClient.get(Number(cv.dataset.spark)).hist, css('--ink-2')));
+  tbody.querySelectorAll('button[data-disconnect]').forEach(b => b.onclick = () => disconnect(Number(b.dataset.disconnect), b.dataset.name));
 }
-
-function kick(id) {
+function disconnect(id, name) {
   const headers = {};
   if (tokenInput.value) headers['X-PQVPN-Token'] = tokenInput.value;
   fetch('/disconnect/' + id, { method: 'POST', headers })
     .then(r => r.json().then(res => ({ status: r.status, res })))
     .then(({ status, res }) => {
-      if (status === 401) pushLog(`kick #${id} rejected: set the dashboard token (printed by dashboard_server)`);
-      else pushLog(`kick #${id}: ${res.ok ? 'sent' : (res.error || 'failed')}`);
+      if (status === 401) event(`Could not disconnect ${name}: enter the token the dashboard server printed.`, 'warn');
+      else if (res.ok) event(`Disconnected ${name}. If its certificate is still valid it will reconnect.`);
+      else event(`Could not disconnect ${name}: ${res.error || 'server refused'}`, 'bad');
     })
-    .catch(e => pushLog(`kick #${id}: ${e}`));
+    .catch(e => event(`Could not reach the dashboard server: ${e}`, 'bad'));
 }
 
-const speedChart = new Chart($('throughput-chart'), {
-  type: 'line',
-  data: { labels: [], datasets: [
-    { label: 'clients → server', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3, pointRadius: 0 },
-    { label: 'server → clients', data: [], borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3, pointRadius: 0 },
-  ]},
-  options: { animation: false, responsive: true, maintainAspectRatio: false,
-    scales: { y: { beginAtZero: true, grid: { color: '#334155' } }, x: { grid: { color: 'transparent' } } },
-    plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12 } } } }
-});
-
-const hsChart = new Chart($('handshake-chart'), {
-  type: 'bar',
-  data: { labels: ['Classical', 'PQC'], datasets: [{ label: 'Session', data: [0, 0], backgroundColor: ['#4c72b0', '#dd8452'] }] },
-  options: { animation: false, responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: { y: { beginAtZero: true, title: { display: true, text: 'state', color: '#94a3b8' }, grid: { color: '#334155' } }, x: { grid: { color: 'transparent' } } } }
-});
-
-// Aggregate counters across every tunnel. The server's totals are the
-// natural source (they cover all clients); fall back to summing the client
-// daemons when only clients are visible. Server bytes_in counts payload and
-// bytes_out counts framed bytes — fine for a rate chart.
-function aggregate(s) {
-  if (s.server) return { in: s.server.bytes_in, out: s.server.bytes_out };
-  if (s.clients && s.clients.length) {
-    // client bytes_out flows toward the server, i.e. server-side "in".
-    return s.clients.reduce((a, c) => ({ in: a.in + c.bytes_out, out: a.out + c.bytes_in }), { in: 0, out: 0 });
-  }
-  return null;
+// ---------- client daemons
+function renderClients(clients) {
+  const el = $('clients');
+  if (!clients.length) { el.innerHTML = '<p class="empty">None running here. The server can still have tunnels from other machines; see the table above.</p>'; return; }
+  el.innerHTML = clients.map(c => {
+    const st = c.state === 'connected' ? 'up' : (c.state === 'reconnecting' || c.state === 'handshake-in-progress') ? 'mid' : 'down';
+    return `<div class="client">
+      <h3><span class="dot ${st}"></span>${c._instance ? `client[${esc(c._instance)}]` : 'client'}<span class="state">${esc(c.state)}</span></h3>
+      <dl class="kv">
+        <dt>Tunnel address</dt><dd class="m">${esc(c.tun_addr)}</dd>
+        <dt>Session</dt><dd>${c.session_seconds ? esc(fmtDur(c.session_seconds)) : '—'}${c.resumed ? ', resumed' : ''}</dd>
+        <dt>Daemon uptime</dt><dd>${esc(fmtDur(c.uptime_seconds))}</dd>
+        <dt>Sent / received</dt><dd>${esc(fmtBytes(c.bytes_out))} / ${esc(fmtBytes(c.bytes_in))}</dd>
+      </dl></div>`;
+  }).join('');
 }
 
-function updateSpeed(agg, now) {
-  if (prev && agg) {
-    const dt = Math.max((now - prev.t) / 1000, 0.01);
-    speedHistory.in.push((agg.in - prev.in) / dt / KB);
-    speedHistory.out.push((agg.out - prev.out) / dt / KB);
-  } else {
-    speedHistory.in.push(0); speedHistory.out.push(0);
+// ---------- header
+let lastKey = null;
+function renderHeader(s) {
+  const server = s.server, clients = s.clients || [];
+  const tunnels = server && server.clients ? server.clients.length : 0;
+  let cls, text;
+  if (!server && !clients.length) { cls = 'down'; text = 'Nothing running. Start the server, then a client.'; }
+  else if (!server) { cls = 'mid'; text = `Server not reachable from here; ${clients.length} client daemon${clients.length === 1 ? '' : 's'} running.`; }
+  else { cls = tunnels ? 'up' : 'mid'; text = `Server up in ${server.mode === 'pqc' ? 'post-quantum' : 'classical'} mode, ${tunnels ? `${tunnels} tunnel${tunnels === 1 ? '' : 's'} connected` : 'waiting for clients'}.`; }
+  const key = cls + text;
+  const changed = lastKey !== null && key !== lastKey;
+  $('dot').className = 'dot ' + cls + (changed ? ' changed' : '');
+  if (changed) event(text);
+  lastKey = key;
+  $('status-line').textContent = text;
+  $('clock').textContent = hms();
+}
+
+// ---------- diff-driven events for tunnels
+let knownTunnels = null;
+function diffTunnels(server) {
+  const now = new Map(((server && server.clients) || []).map(c => [c.id, c]));
+  if (knownTunnels) {
+    for (const [id, c] of now) if (!knownTunnels.has(id)) event(`Tunnel ${c.name || '#' + id} connected on ${c.ip}, port ${c.port}.`);
+    for (const [id, c] of knownTunnels) if (!now.has(id)) event(`Tunnel ${c.name || '#' + id} closed.`);
   }
-  if (speedHistory.in.length > MAX_POINTS) { speedHistory.in.shift(); speedHistory.out.shift(); }
-  speedChart.data.labels.push(new Date().toLocaleTimeString());
-  if (speedChart.data.labels.length > MAX_POINTS) speedChart.data.labels.shift();
-  speedChart.data.datasets[0].data = speedHistory.in.slice();
-  speedChart.data.datasets[1].data = speedHistory.out.slice();
-  speedChart.update('none');
-  prev = agg ? { t: now, in: agg.in, out: agg.out } : null;
+  knownTunnels = now;
 }
 
 function render(s) {
   const now = Date.now();
-  const server = s.server, clients = s.clients || [];
-  const up = clients.filter(c => c.state === 'connected').length;
-  pill($('server-pill'), server ? server.state : 'down', 'server · ' + (server ? server.state : 'offline'));
-  pill($('client-pill'), clients.length ? (up === clients.length ? 'connected' : (up ? 'reconnecting' : clients[0].state)) : 'down',
-       clients.length ? `clients · ${up}/${clients.length} connected` : 'clients · none');
-  renderKv($('server-kv'), server);
-  renderClients(clients);
-  renderTunnels(server && server.clients, now);
-  updateSpeed(aggregate(s), now);
-  const mode = clients.length ? clients[0].mode : (server ? server.mode : 'classical');
-  const idx = mode === 'pqc' ? 1 : 0;
-  hsChart.data.datasets[0].data = [0, 0];
-  hsChart.data.datasets[0].data[idx] = 1;
-  hsChart.data.labels = ['Classical', 'PQC'];
-  hsChart.update('none');
-  const resumed = clients.filter(c => c.resumed).length;
-  $('resume-note').textContent = clients.length
-    ? (resumed ? `✓ ${resumed}/${clients.length} handshakes resumed from ticket cache` : 'full handshakes (tickets not accepted)')
-    : '';
-  $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
-}
-
-function firstPaint(s) {
-  const n = (s.clients || []).length;
-  pushLog('dashboard connected — server ' + (s.server ? s.server.state : 'offline') + `, ${n} client daemon${n === 1 ? '' : 's'}`);
-  const agg = aggregate(s);
-  prev = agg ? { t: Date.now(), in: agg.in, out: agg.out } : null;
+  renderHeader(s);
+  renderHero(s);
+  updateThroughput(s, now);
+  renderTunnels(s.server, now);
+  diffTunnels(s.server);
+  renderClients(s.clients || []);
 }
 
 let connected = false;
 function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/status`);
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/status`);
   ws.onmessage = e => {
     const s = JSON.parse(e.data);
-    if (!connected) { firstPaint(s); connected = true; }
+    if (!connected) { connected = true; event('Dashboard connected.'); const agg = aggregate(s); prev = agg ? { t: Date.now(), in: agg.in, out: agg.out } : null; }
     render(s);
   };
-  ws.onclose = () => {
-    connected = false;
-    pushLog('dashboard connection lost, reconnecting…');
-    setTimeout(connect, 1000);
-  };
+  ws.onclose = () => { connected = false; $('dot').className = 'dot down'; $('status-line').textContent = 'Dashboard server unreachable; retrying…'; setTimeout(connect, 1000); };
 }
 connect();
 </script>
