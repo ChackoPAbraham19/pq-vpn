@@ -1,5 +1,7 @@
 # PQ-VPN — Post-Quantum Secure VPN Tunnel
 
+[![clean build](https://github.com/ChackoPAbraham19/Major-Project/actions/workflows/clean-build.yml/badge.svg)](https://github.com/ChackoPAbraham19/Major-Project/actions/workflows/clean-build.yml)
+
 A working Linux VPN (real TUN device, real routing, real DNS) whose TLS 1.3 control
 plane can run either **classical** crypto (ECDSA P-256 + X25519) or **post-quantum**
 crypto (NIST **ML-DSA-65** certificates + hybrid **X25519MLKEM768** key exchange) with a
@@ -66,6 +68,9 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
   for both modes in the benchmark; see limitations).
 - **Tooling** — `vpnctl` CLI over Unix-socket IPC; FastAPI + WebSocket **dashboard** with
   per-tunnel rates and a token-guarded kick; `demo.sh` for a reproducible run.
+- **CI** — every push rebuilds the entire PQC stack from `ubuntu:24.04`, gates on the
+  provider exposing ML-KEM-768 / ML-DSA-65, and runs every suite inside the image
+  (`.github/workflows/clean-build.yml`).
 
 ## Architecture
 

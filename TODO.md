@@ -194,6 +194,11 @@
 - [x] `scripts/deploy_vps.sh [--dry-run] user@host` — rsync, build stack if missing + provider verify, venv, ufw for welcome + slot port range, enable service, print status (idempotent)
 - [x] `docs/DEPLOYMENT.md` §6 rewritten around the script
 
+## Phase 8: CI [completed]
+- [x] `.github/workflows/clean-build.yml`: Docker build from ubuntu:24.04 with GHA layer cache → provider verify gate → all suites + bench; `live-netns` job runs the 2-client PQC demo in a privileged container (allowed to fail: hosted runners may lack /dev/net/tun)
+- [x] README badge
+- [ ] First green run on GitHub after push
+
 ## Phase 7b: Capstone — run on a real VPS (payment, LAST) [pending]
 - [ ] Buy x86 VPS (Ubuntu 24.04); `bash scripts/deploy_vps.sh user@<ip>`
 - [ ] Cloud security group: TCP 14430 + 14431–14433 from client IPs

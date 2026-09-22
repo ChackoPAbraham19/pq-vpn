@@ -1,0 +1,58 @@
+# Clean-build proof on every push: rebuild the whole post-quantum stack from a
+# bare ubuntu:24.04 (same script a VPS runs), gate on the provider exposing
+# ML-KEM-768 / ML-DSA-65, generate both PKIs, run every unit suite + the real
+# handshake benchmark. This is scripts/clean_build_check.sh split into steps so
+# a failure is attributable. The crypto stage (~3 min) is cached across runs.
+name: clean build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  clean-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image from ubuntu:24.04
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: pqvpn:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Provider verify gate (ML-KEM-768 + ML-DSA-65 via oqsprovider)
+        run: |
+          docker run --rm pqvpn:ci sh -c '
+            openssl version &&
+            openssl list -kem-algorithms       -provider oqsprovider -provider default | grep -i "^ *mlkem768" &&
+            openssl list -signature-algorithms -provider oqsprovider -provider default | grep -i "^ *mldsa65"'
+      - name: Unit suites + handshake bench inside the image
+        run: docker run --rm pqvpn:ci
+
+  live-netns:
+    # Full tunnel demo (netns + TUN + iptables) inside a privileged container.
+    # Hosted runners do not guarantee /dev/net/tun, so this is informational.
+    needs: clean-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: pqvpn:ci
+          load: true
+          cache-from: type=gha
+      - name: 2-client PQC tunnel over netns
+        run: |
+          test -e /dev/net/tun || { echo "no /dev/net/tun on this runner; skipping"; exit 0; }
+          docker run --rm --privileged --device /dev/net/tun pqvpn:ci \
+            bash scripts/demo.sh --mode pqc --clients 2

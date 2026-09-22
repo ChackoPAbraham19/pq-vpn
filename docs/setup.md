@@ -28,6 +28,9 @@ generates both PKIs, and `CMD` runs `scripts/demo.sh --dry-run --mode pqc`. The
 script falls back to `docker build --network=host` when bridge-mode containers
 have no egress (typical with ufw's default FORWARD policy).
 
+The same check runs in GitHub Actions on every push (`.github/workflows/clean-build.yml`);
+the README badge reflects the latest result.
+
 ## Step 1: System Dependencies
 
 ```bash
