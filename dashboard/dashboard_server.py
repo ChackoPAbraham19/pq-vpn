@@ -132,10 +132,14 @@ async def ws_status(ws: WebSocket):
     try:
         while True:
             snapshot = feed.latest()
-            if snapshot != last:
+            # Identity, not equality: latest() hands back the same dict until
+            # the poller replaces it. Checking often (not every POLL_INTERVAL)
+            # keeps delivery locked to the poller's cadence instead of beating
+            # against it, which showed up as a sawtooth in the rate chart.
+            if snapshot is not last:
                 await ws.send_json(snapshot)
                 last = snapshot
-            await asyncio.sleep(POLL_INTERVAL)
+            await asyncio.sleep(0.05)
     except WebSocketDisconnect:
         pass
 

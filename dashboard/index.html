@@ -171,7 +171,7 @@
 
   <section class="panel" aria-labelledby="tp-h">
     <div class="chart-head">
-      <h2 id="tp-h">Throughput <span>last 60 s</span></h2>
+      <h2 id="tp-h">Throughput <span id="tp-span">last 60 s</span></h2>
       <div class="legend"><span><i style="background:var(--to-server)"></i>clients to server</span><span><i style="background:var(--to-clients)"></i>server to clients</span></div>
     </div>
     <div class="now">
@@ -300,6 +300,7 @@ const tp = new Chart($('tp'), {
   },
 });
 let prev = null;        // aggregate counters at the last snapshot
+const tpTimes = [];     // poller timestamps of the points on the chart
 function aggregate(s) {
   if (s.server) return { in: s.server.bytes_in, out: s.server.bytes_out };
   if (s.clients && s.clients.length) return s.clients.reduce((a, c) => ({ in: a.in + c.bytes_out, out: a.out + c.bytes_in }), { in: 0, out: 0 });
@@ -315,6 +316,8 @@ function updateThroughput(s, now) {
   d.datasets[0].data.push(rin); d.datasets[1].data.push(rout);
   if (d.labels.length > MAX_POINTS) { d.labels.shift(); d.datasets.forEach(ds => ds.data.shift()); }
   tp.update('none');
+  tpTimes.push(now); if (tpTimes.length > MAX_POINTS) tpTimes.shift();
+  if (tpTimes.length > 2) $('tp-span').textContent = `last ${Math.round((tpTimes[tpTimes.length - 1] - tpTimes[0]) / 1000)} s`;
   $('now-in').innerHTML = `${(rin / MB).toFixed(1)}<small>MB/s</small>`;
   $('now-out').innerHTML = `${(rout / MB).toFixed(1)}<small>MB/s</small>`;
   const total = agg ? agg.in + agg.out : 0;
@@ -430,7 +433,9 @@ function diffTunnels(server) {
 }
 
 function render(s) {
-  const now = Date.now();
+  // Rates use the poller's own timestamp so a late or bunched WebSocket
+  // delivery never distorts bytes-per-second.
+  const now = s.timestamp ? s.timestamp * 1000 : Date.now();
   renderHeader(s);
   renderHero(s);
   updateThroughput(s, now);
