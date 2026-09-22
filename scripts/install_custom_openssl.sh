@@ -27,13 +27,20 @@ LIBOQS_SRC="/tmp/liboqs_src"
 OQS_PROVIDER_SRC="/tmp/oqs_provider_src"
 BUILD_DIR="/tmp/pqc_build"
 
-NPROC="$(nproc)"
+# Build parallelism. Default = all cores; set BUILD_JOBS=1 on a small burstable
+# VPS (AWS Lightsail $5/$7, similar t-class boxes): a full-throttle compile
+# exhausts the CPU burst credits in ~10 minutes and the instance is then
+# throttled to a few percent of a core — SSH included — for the next hour.
+# Slower, but it finishes instead of wedging the box.
+NPROC="${BUILD_JOBS:-$(nproc)}"
+# `nice` keeps sshd responsive even while the build saturates what CPU we have.
+NICE="$(command -v nice >/dev/null && echo 'nice -n 10' || true)"
 
 # Root inside a container has no sudo; a normal user needs it.
 SUDO="$(command -v sudo || true)"
 [ "$(id -u)" -eq 0 ] && SUDO=""
 
-echo "=== Installing build dependencies ==="
+echo "=== Installing build dependencies (jobs: ${NPROC}) ==="
 $SUDO apt-get update -qq
 $SUDO apt-get install -y -qq build-essential cmake ninja-build git libssl-dev zlib1g-dev 2>&1 | tail -2
 
@@ -56,7 +63,7 @@ fi
 cd "${OPENSSL_SRC}"
 ./Configure --prefix="${PREFIX}" --openssldir="${PREFIX}/ssl" \
     shared zlib linux-x86_64
-make -j"${NPROC}"
+${NICE} make -j"${NPROC}"
 make install_sw
 # Install dev headers too (needed for liboqs/oqs-provider builds)
 make install_dev
@@ -89,7 +96,7 @@ cmake -GNinja \
     -DBUILD_SHARED_LIBS=ON \
     -DOQS_USE_OPENSSL=ON \
     -DOPENSSL_ROOT_DIR="${PREFIX}" ..
-ninja
+${NICE} ninja -j"${NPROC}"
 ninja install
 
 echo "=== liboqs rebuilt ==="
@@ -108,7 +115,7 @@ cmake -S . -B _build \
     -DCMAKE_BUILD_TYPE=Release \
     -Dliboqs_DIR="${PREFIX}/lib/cmake/liboqs" \
     -DOPENSSL_ROOT_DIR="${PREFIX}"
-cmake --build _build --parallel "${NPROC}"
+${NICE} cmake --build _build --parallel "${NPROC}"
 cmake --install _build
 
 echo "=== oqs-provider rebuilt ==="

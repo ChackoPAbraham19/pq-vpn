@@ -47,8 +47,14 @@ run rsync -az --delete \
     --exclude 'benchmark/results/*.csv' --exclude '.~lock.*' \
     "$PDIR/" "$TARGET:$REMOTE_DIR/"
 
-echo "== 2/5 PQC OpenSSL stack (skipped if present) =="
-remote "test -x /opt/openssl-pqc/bin/openssl || bash $REMOTE_DIR/scripts/install_custom_openssl.sh"
+echo "== 2/5 PQC OpenSSL stack (skipped if present; ~35 min at BUILD_JOBS=1) =="
+# BUILD_JOBS=1 unless the caller overrides: most cheap VPS instances are
+# burstable, and a full-throttle compile burns their CPU credits to zero and
+# throttles the box (SSH included) for an hour. Export BUILD_JOBS=0 to use all
+# cores on a dedicated-CPU box.
+JOBS="${BUILD_JOBS:-1}"
+[ "$JOBS" = "0" ] && JOBS="$(ssh "$TARGET" nproc 2>/dev/null || echo 1)"
+remote "test -x /opt/openssl-pqc/bin/openssl || BUILD_JOBS=${JOBS} bash $REMOTE_DIR/scripts/install_custom_openssl.sh"
 remote "export PATH=/opt/openssl-pqc/bin:\$PATH LD_LIBRARY_PATH=/opt/openssl-pqc/lib64:/opt/openssl-pqc/lib; \
 openssl list -kem-algorithms -provider oqsprovider -provider default | grep -qi mlkem768 && \
 openssl list -signature-algorithms -provider oqsprovider -provider default | grep -qi mldsa65 && \

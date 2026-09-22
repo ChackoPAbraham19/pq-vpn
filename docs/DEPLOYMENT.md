@@ -133,8 +133,14 @@ What it does on the VPS, in order:
 
 1. `rsync` the repo to `/opt/pqvpn` (certs included; `.venv`/`.git` excluded).
 2. Build the PQC OpenSSL stack with `scripts/install_custom_openssl.sh` **only if**
-   `/opt/openssl-pqc` is missing (~15 min), then verify the provider lists
-   `mlkem768` and `mldsa65`.
+   `/opt/openssl-pqc` is missing, then verify the provider lists `mlkem768` and
+   `mldsa65`. The deploy passes `BUILD_JOBS=1` and `nice`s the compile: cheap VPS
+   instances are CPU-burstable, and a full-throttle build drains their burst
+   credits in ~10 minutes, after which the whole box — SSH included — is
+   throttled to a few percent of a core for an hour (seen on a Lightsail 1 GB
+   instance: the build finished, then the instance became unreachable). One job
+   takes ~35–45 min and leaves the box usable. `BUILD_JOBS=0 bash scripts/deploy_vps.sh …`
+   uses all cores on a dedicated-CPU host.
 3. `python3 -m venv .venv` + `requirements.txt`; apt `iproute2 iptables dnsmasq`.
 4. `ufw allow` for the welcome port and `data_port_base..data_port_base+max_clients-1`
    (read from your config; 14430 + 14431–14433 by default).
