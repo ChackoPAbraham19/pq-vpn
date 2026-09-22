@@ -216,7 +216,7 @@
 - [x] `common/test_net_config.py` 25/25
 - [x] netns run (2026-09-22): mangle TCPMSS rules present in vpn_ns1; v6 blackhole present in vpn_ns2 while up, gone after teardown
 - [x] Found by the first `--egress` run: the client's `default … metric 50` lost to the harness's metric-0 default → internet traffic bypassed the tunnel while pings to the server worked. Fixed: client now installs `0.0.0.0/1` + `128.0.0.0/1` via tun0 (beats any default regardless of metric)
-- [ ] netns run: `demo.sh --mode pqc --clients 2 --egress` shows the host's public IP from each client
+- [x] netns run (2026-09-22): `demo.sh --mode pqc --clients 2 --egress` → both clients see the host's public IP through the tunnel; `curl https://ifconfig.me/ip` from vpn_ns2 (DNS + HTTPS by hostname, inside the tunnel) prints it too; /1 half-routes above the metric-0 default in `ip route`
 
 ## Phase 7b: Capstone — run on a real VPS (payment, LAST) [pending]
 - [ ] Buy x86 VPS (Ubuntu 24.04); `bash scripts/deploy_vps.sh user@<ip>`
