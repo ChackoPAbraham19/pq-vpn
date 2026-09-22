@@ -43,7 +43,7 @@ def test_client_dns_skip_env():
         test('skip-env prints one confirmatory line on first call', ok_line, out1)
         test('skip-env is memoized: later calls fully silent', ok_memo, out2)
         # route still applied — DNS skip must not affect the tunnel itself
-        ok_route = any(c.startswith('ip route add default via 10.8.0.1 dev tun0') for c in calls)
+        ok_route = any(c.startswith('ip route add 0.0.0.0/1 via 10.8.0.1 dev tun0') for c in calls)
         test('skip-env leaves route handling untouched', ok_route)
     finally:
         nc._run = orig_run
@@ -149,7 +149,8 @@ def test_client_route_command():
            'dns_servers': '10.8.0.1'}
     out = _dry_run_capture(lambda: apply_tunnel_net(cfg, dry_run=True))
     required = [
-        'ip route add default via 10.8.0.1 dev tun0 metric 50',
+        'ip route add 0.0.0.0/1 via 10.8.0.1 dev tun0',
+        'ip route add 128.0.0.0/1 via 10.8.0.1 dev tun0',
         # preview names whichever method a real run would pick on this host
         'would set DNS via',
     ]
@@ -173,7 +174,7 @@ def test_client_protect_route_order():
         protect = 'ip route add 192.168.100.2/32 via 192.168.200.1 dev veth-ns2'
         ok_present = protect in out
         i_protect = out.find(protect)
-        i_default = out.find('ip route add default via 10.8.0.1')
+        i_default = out.find('ip route add 0.0.0.0/1 via 10.8.0.1')
         ok_order = i_protect != -1 and i_default != -1 and i_protect < i_default
         test('protect /32 route emitted for server endpoint', ok_present, out)
         test('protect route comes BEFORE tunnel default', ok_order,
@@ -188,7 +189,7 @@ def test_client_protect_route_order():
         out_r = _dry_run_capture(lambda: restore_tunnel_net(applied_snap, cfg, dry_run=True))
         del_protect = 'ip route del 192.168.100.2/32 via 192.168.200.1 dev veth-ns2'
         i_dp = out_r.find(del_protect)
-        i_dd = out_r.find('ip route del default via 10.8.0.1')
+        i_dd = out_r.find('ip route del 0.0.0.0/1 via 10.8.0.1')
         ok_restore = i_dp != -1 and i_dd != -1 and i_dp < i_dd
         test('restore deletes protect route before tunnel default', ok_restore, out_r)
     finally:
@@ -231,7 +232,8 @@ def test_client_restore_command():
     out = _dry_run_capture(
         lambda: restore_tunnel_net({'route': True, 'dns_method': 'resolv.conf'}, cfg, dry_run=True))
     required = [
-        'ip route del default via 10.8.0.1 dev tun0 metric 50',
+        'ip route del 0.0.0.0/1 via 10.8.0.1 dev tun0',
+        'ip route del 128.0.0.0/1 via 10.8.0.1 dev tun0',
         'would restore /etc/resolv.conf',
     ]
     ok = all(r in out for r in required)

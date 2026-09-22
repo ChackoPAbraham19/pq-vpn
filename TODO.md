@@ -214,7 +214,9 @@
 - [x] `deploy_vps.sh`: `ufw route allow` tunnel↔egress both ways (durable across `ufw reload`)
 - [x] `setup_routing.sh`: host NATs the server namespace out the uplink; `demo.sh --egress` curls a public IP-echo from each client through the tunnel
 - [x] `common/test_net_config.py` 25/25
-- [ ] netns run: `demo.sh --mode pqc --clients 2 --egress` shows the host's public IP from each client; mangle TCPMSS rules present in vpn_ns1; v6 blackhole present in vpn_ns2 while up, gone after teardown
+- [x] netns run (2026-09-22): mangle TCPMSS rules present in vpn_ns1; v6 blackhole present in vpn_ns2 while up, gone after teardown
+- [x] Found by the first `--egress` run: the client's `default … metric 50` lost to the harness's metric-0 default → internet traffic bypassed the tunnel while pings to the server worked. Fixed: client now installs `0.0.0.0/1` + `128.0.0.0/1` via tun0 (beats any default regardless of metric)
+- [ ] netns run: `demo.sh --mode pqc --clients 2 --egress` shows the host's public IP from each client
 
 ## Phase 7b: Capstone — run on a real VPS (payment, LAST) [pending]
 - [ ] Buy x86 VPS (Ubuntu 24.04); `bash scripts/deploy_vps.sh user@<ip>`

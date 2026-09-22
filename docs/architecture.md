@@ -229,6 +229,7 @@ The sockets are created `0666` so a non-root `vpnctl`/dashboard can talk to root
 | Compromised PKI | Both modes always require mutual TLS authentication: client and server both present certs |
 | Compromised / lost client key | Per-client certificates from a real CA database (`pki/issue_client.sh`); `pki/revoke_client.sh <mode> <name> [--kick]` adds it to `crl.pem`, which every new `s_server` loads (`-CRL -crl_check -verify_return_error`) so the next handshake fails with alert 44, and `--kick` ends the live session via `vpnctl disconnect-client`. No daemon restart. |
 | Network namespace-level censoring | `setup_routing.sh` creates isolated netns; no exposed interfaces except via defined rules |
+| IPv4 leak past a low-metric default route | Client routes `0.0.0.0/1` + `128.0.0.0/1` via tun0 — more specific than any `/0`, so they win regardless of the host's default-route metric (found live: a metric-0 default in the netns harness silently bypassed a `default … metric 50` tunnel route) |
 | IPv6 leak (tunnel is IPv4-only) | Client blackholes its IPv6 default route while connected (`block_ipv6`, default on); restored on disconnect |
 | PMTU blackholes through the 1400-byte tunnel | Server clamps TCP MSS to path MTU on the forward path in both directions (`mss_clamp`, default on) |
 

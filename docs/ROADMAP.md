@@ -75,7 +75,7 @@ unambiguous vs tunnel data.
   tunnel interface with upstream from config (`dns_upstream`, default 1.1.1.1).
   `outbound_iface` is config-driven (`eth0` on VPS, `veth-ns1` in netns).
 - `client/net_config.py`: `apply_tunnel_net`/`restore_tunnel_net` — push
-  `ip route add default via <gw> dev tun0 metric 50`, set DNS via `resolvectl`
+  the `0.0.0.0/1` + `128.0.0.0/1` half-routes via tun0 (win over any default regardless of metric), set DNS via `resolvectl`
   (systemd) or `/etc/resolv.conf` fallback; tracked state so teardown only
   restores what was changed.
 - Both support `--dry-run` (print commands, no root) for testable plumbing.

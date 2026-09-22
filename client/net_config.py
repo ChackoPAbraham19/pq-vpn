@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """net_config.py — client-side network plumbing for the PQ-VPN.
 
-After the tunnel is up, pushes a default route through tun0 at metric 50 and
-sets DNS via `resolvectl` (systemd) or /etc/resolv.conf fallback. Tracks what
+After the tunnel is up, routes all IPv4 through tun0 as the two half-routes
+0.0.0.0/1 + 128.0.0.0/1 (more specific than any default, so they win regardless
+of the existing default's metric — the OpenVPN/WireGuard technique) and sets DNS via `resolvectl` (systemd) or /etc/resolv.conf fallback. Tracks what
 it changed so teardown can restore the prior state.
 
 All commands can be printed instead of executed with dry_run=True so the
@@ -60,13 +61,19 @@ def _run(cmd, dry_run=False, check=False):
         raise
 
 
-def _route_exists(gateway, tun_name, metric, dry_run=False) -> bool:
+# Two half-routes cover 0.0.0.0/0 but are /1, so they beat ANY existing default
+# route no matter its metric. A plain `default ... metric 50` silently lost to a
+# metric-0 default (static configs, the netns harness): tunnel up, server
+# pingable, internet traffic leaving outside the tunnel.
+HALF_ROUTES = ('0.0.0.0/1', '128.0.0.0/1')
+
+
+def _route_exists(prefix, gateway, tun_name, dry_run=False) -> bool:
     if dry_run:
         return False
     try:
         out = subprocess.run(
-            ['ip', 'route', 'show', 'default', 'via', gateway, 'dev', tun_name,
-             'metric', str(metric)],
+            ['ip', 'route', 'show', prefix, 'via', gateway, 'dev', tun_name],
             capture_output=True, text=True,
         )
         return gateway in out.stdout and tun_name in out.stdout
@@ -132,10 +139,11 @@ def apply_tunnel_net(config: dict, dry_run=False) -> dict:
               'via', orig_gw, 'dev', orig_dev], dry_run=dry_run, check=True)
         applied['protect'] = {'host': server_host, 'via': orig_gw, 'dev': orig_dev}
 
-    if not _route_exists(gateway, tun_name, metric, dry_run):
-        _run(['ip', 'route', 'add', 'default', 'via', gateway, 'dev', tun_name,
-              'metric', str(metric)], dry_run=dry_run, check=True)
-        applied['route'] = True
+    for prefix in HALF_ROUTES:
+        if not _route_exists(prefix, gateway, tun_name, dry_run):
+            _run(['ip', 'route', 'add', prefix, 'via', gateway, 'dev', tun_name],
+                 dry_run=dry_run, check=True)
+            applied['route'] = True
 
     # The tunnel carries IPv4 only. On a host with IPv6 connectivity, v6-capable
     # sites would be reached OUTSIDE the tunnel with the real address — the
@@ -236,8 +244,9 @@ def restore_tunnel_net(applied: dict, config: dict, dry_run=False):
               'via', prot['via'], 'dev', prot['dev']], dry_run=dry_run, check=False)
 
     if applied.get('route'):
-        _run(['ip', 'route', 'del', 'default', 'via', gateway, 'dev', tun_name,
-              'metric', str(metric)], dry_run=dry_run, check=False)
+        for prefix in HALF_ROUTES:
+            _run(['ip', 'route', 'del', prefix, 'via', gateway, 'dev', tun_name],
+                 dry_run=dry_run, check=False)
 
     if applied.get('ipv6_blackhole'):
         _run(['ip', '-6', 'route', 'del', 'blackhole', 'default', 'metric', str(metric)],
