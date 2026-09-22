@@ -206,7 +206,7 @@
 - [x] Client: `client_name` → `clients/<name>.{crt,key}`; post-mTLS hello frame carries the name; `vpnctl status` + dashboard show it; `vpnctl disconnect-client <name>` / IPC `disconnect_client`
 - [x] `common/test_common.py` 71/71 incl. real s_server: revoked client → alert 44, nothing relayed; unrevoked client through the same CRL relays fine
 - [x] Item 3 (cross-restart resumption) deferred with the precise reason in architecture.md: `s_server` cannot load a ticket key → needs a custom TLS server
-- [ ] netns run: `revoke_client.sh pqc ns3 --kick` drops ns3, its reconnects log `certificate revoked`, `client` unaffected
+- [x] netns run (2026-09-22): `revoke_client.sh pqc ns3 --kick` → CRL serial 1001, `Disconnected 'ns3': session(s) [2]`, ns3 reconnect got `SSL alert number 44 … certificate revoked` and stayed in backoff, `client` pinged at 0% loss, reissue refused until the revoked file is removed
 
 ## Phase 7b: Capstone — run on a real VPS (payment, LAST) [pending]
 - [ ] Buy x86 VPS (Ubuntu 24.04); `bash scripts/deploy_vps.sh user@<ip>`
