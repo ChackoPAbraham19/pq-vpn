@@ -197,7 +197,7 @@
 ## Phase 8: CI [completed]
 - [x] `.github/workflows/clean-build.yml`: Docker build from ubuntu:24.04 with GHA layer cache → provider verify gate → all suites + bench; `live-netns` job runs the 2-client PQC demo in a privileged container (allowed to fail: hosted runners may lack /dev/net/tun)
 - [x] README badge
-- [ ] First green run on GitHub after push
+- [x] First green run on GitHub after push (2026-09-22)
 
 ## Phase 9: Per-client certificates + revocation [completed]
 - [x] `pki/ca.cnf` + `pki/_env.sh`: `openssl ca` database per PKI (index/serial/crlnumber), `default_md = default` so the ML-DSA CA signs CRLs
