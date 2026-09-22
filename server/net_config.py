@@ -56,6 +56,7 @@ def setup_nat(config: dict, dry_run=False):
       outbound_iface e.g. 'veth-ns1' (netns) / 'eth0' (VPS)
       nat            bool, default True
       persist_sysctl bool, default False — write /etc/sysctl.d/99-pqvpn.conf
+      mss_clamp      bool, default True — TCPMSS clamp on the tunnel (PMTU blackholes)
     """
     if not config.get('nat', True):
         print('[net_config] NAT disabled by config')
@@ -80,17 +81,32 @@ def setup_nat(config: dict, dry_run=False):
     fwd_out = ['-i', tun_name, '-o', egress, '-j', 'ACCEPT']
     fwd_in = ['-i', egress, '-o', tun_name, '-j', 'ACCEPT']
 
-    checks_adds = (
+    checks_adds = [
         (['-t', 'nat', '-C', 'POSTROUTING'] + nat_spec,
          ['-t', 'nat', '-A', 'POSTROUTING'] + nat_spec),
         (['-C', 'FORWARD'] + fwd_out,
          ['-A', 'FORWARD'] + fwd_out),
         (['-C', 'FORWARD'] + fwd_in,
          ['-A', 'FORWARD'] + fwd_in),
-    )
+    ]
+    if config.get('mss_clamp', True):
+        # The tunnel MTU (1400) is smaller than the upstream's (1500). Without
+        # clamping, TCP peers on the internet pick a 1460-byte MSS, their
+        # full-size segments cannot enter the tunnel, and path-MTU discovery
+        # often fails silently: pages half-load, downloads stall. Clamp SYNs
+        # in both directions to the path MTU — standard for any full-tunnel VPN.
+        for spec in _mss_specs(tun_name):
+            checks_adds.append((['-t', 'mangle', '-C', 'FORWARD'] + spec,
+                                ['-t', 'mangle', '-A', 'FORWARD'] + spec))
     for check_cmd, add_cmd in checks_adds:
         if not _rule_exists(check_cmd, dry_run):
             _run(['iptables'] + add_cmd, dry_run=dry_run)
+
+
+def _mss_specs(tun_name: str) -> list[list[str]]:
+    """TCPMSS clamp rules for SYNs entering and leaving the tunnel."""
+    tail = ['-p', 'tcp', '--tcp-flags', 'SYN,RST', 'SYN', '-j', 'TCPMSS', '--clamp-mss-to-pmtu']
+    return [['-o', tun_name] + tail, ['-i', tun_name] + tail]
 
 
 def teardown_nat(config: dict, dry_run=False):
@@ -105,11 +121,13 @@ def teardown_nat(config: dict, dry_run=False):
     fwd_out = ['-i', tun_name, '-o', egress, '-j', 'ACCEPT']
     fwd_in = ['-i', egress, '-o', tun_name, '-j', 'ACCEPT']
 
-    deletes = (
+    deletes = [
         ['-t', 'nat', '-D', 'POSTROUTING'] + nat_spec,
         ['-D', 'FORWARD'] + fwd_out,
         ['-D', 'FORWARD'] + fwd_in,
-    )
+    ]
+    if config.get('mss_clamp', True):
+        deletes += [['-t', 'mangle', '-D', 'FORWARD'] + spec for spec in _mss_specs(tun_name)]
     for del_cmd in deletes:
         _run(['iptables'] + del_cmd, dry_run=dry_run, check=False)
 

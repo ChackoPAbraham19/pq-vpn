@@ -197,6 +197,30 @@ sudo ufw status verbose
 above. The VPS cloud firewall must match the same allow-list; the OS ufw is defense
 in depth.)
 
+`deploy_vps.sh` also adds `ufw route allow in on tun0 out on <outbound_iface>` and
+the reverse. ufw's forward policy is DROP; the daemon's own `iptables -A FORWARD`
+ACCEPT rules do work behind ufw's chains, but a `ufw reload` flushes them — the
+explicit route rules are the durable form and stay scoped to tunnel↔egress.
+
+### 6.4c What makes real websites work through the tunnel
+
+Three things a full-tunnel VPN needs beyond "packets get across", all on by default:
+
+- **TCP MSS clamp** (`mss_clamp: true`, server): the tunnel MTU is 1400, the internet
+  is 1500. Without `TCPMSS --clamp-mss-to-pmtu` on the forward path, sites that send
+  full-size segments with DF set stall on path-MTU discovery (half-loaded pages,
+  hanging downloads).
+- **IPv6 leak guard** (`block_ipv6: true`, client): the tunnel is IPv4-only, so the
+  client blackholes its IPv6 default route while connected — otherwise v6-capable
+  sites are reached outside the tunnel with the real address. Removed on disconnect.
+- **DNS through the tunnel**: the pushed resolver is `dnsmasq` on the server's tunnel
+  address, so lookups never leave via the home network.
+
+Acceptance test on a real client: `curl ifconfig.me` prints the VPS IP,
+`curl -6 --max-time 5 ifconfig.me` fails (leak closed), and
+`curl -o /dev/null https://speed.cloudflare.com/__down?bytes=100000000` completes
+without stalling.
+
 ### 6.5 Rollback / rebuild
 
 `scripts/rollback.sh` reverses the OpenSSL build (removes `/opt/openssl-pqc`).

@@ -29,6 +29,9 @@ VETH_HOST="veth-h"
 VETH_NS1="veth-ns1"
 IP_HOST="192.168.100.1"
 IP_NS1="192.168.100.2"
+# Host interface that carries the default route (wlp3s0, eth0, ...). Empty when
+# the host is offline; egress NAT is then skipped.
+HOST_UPLINK="$(ip route show default 2>/dev/null | awk '/^default/ {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
 
 # Client ns ⇄ host (each client on its own host veth)
 # client index: 2,3,4 → 200,210,220
@@ -58,6 +61,12 @@ cleanup() {
     for v in "${VETH_HOST}" "${VETH_HOST2}" "${VETH_HOST3}" "${VETH_HOST4}"; do
         ip link del "${v}" 2>/dev/null || true
     done
+    # Host-side egress NAT for the server namespace (see "Internet egress" below).
+    if [ -n "${HOST_UPLINK:-}" ]; then
+        iptables -t nat -D POSTROUTING -s "${IP_NS1}/32" -o "${HOST_UPLINK}" -j MASQUERADE 2>/dev/null || true
+        iptables -D FORWARD -i "${VETH_HOST}" -o "${HOST_UPLINK}" -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -i "${HOST_UPLINK}" -o "${VETH_HOST}" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+    fi
     echo "Cleanup done."
 }
 
@@ -126,6 +135,21 @@ for host_veth in "${VETH_HOST}" "${VETH_HOST2}" "${VETH_HOST3}" "${VETH_HOST4}";
         iptables -A FORWARD -i "${host_veth}" -o "${peer}" -j ACCEPT 2>/dev/null || true
     done
 done
+
+# Internet egress for the server namespace: NAT its traffic out the host's
+# uplink so clients can reach real sites THROUGH the tunnel on the laptop, not
+# only on a VPS. Idempotent (-C before -A); undone in cleanup().
+if [ -n "${HOST_UPLINK}" ]; then
+    iptables -t nat -C POSTROUTING -s "${IP_NS1}/32" -o "${HOST_UPLINK}" -j MASQUERADE 2>/dev/null \
+        || iptables -t nat -A POSTROUTING -s "${IP_NS1}/32" -o "${HOST_UPLINK}" -j MASQUERADE
+    iptables -C FORWARD -i "${VETH_HOST}" -o "${HOST_UPLINK}" -j ACCEPT 2>/dev/null \
+        || iptables -A FORWARD -i "${VETH_HOST}" -o "${HOST_UPLINK}" -j ACCEPT
+    iptables -C FORWARD -i "${HOST_UPLINK}" -o "${VETH_HOST}" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
+        || iptables -A FORWARD -i "${HOST_UPLINK}" -o "${VETH_HOST}" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    echo "=== Egress: ${IP_NS1} NATed out ${HOST_UPLINK} (clients can reach the internet through the tunnel) ==="
+else
+    echo "=== Egress: no host default route found; tunnel works, internet through it will not ==="
+fi
 
 # Success — disable the trap so cleanup() doesn't run on exit
 trap - EXIT SIGINT SIGTERM

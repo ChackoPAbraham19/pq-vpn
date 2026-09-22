@@ -247,6 +247,38 @@ def test_client_restore_idempotent():
     test('client restore no-op when nothing applied', ok, out)
 
 
+def test_server_mss_clamp():
+    from server.net_config import setup_nat, teardown_nat
+    cfg = {'tun_net': '10.8.0.0/24', 'tun_name': 'tun0', 'outbound_iface': 'eth0', 'nat': True}
+    out = _dry_run_capture(lambda: setup_nat(cfg, dry_run=True))
+    clamp_out = 'iptables -t mangle -A FORWARD -o tun0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu'
+    clamp_in = 'iptables -t mangle -A FORWARD -i tun0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu'
+    test('server clamps TCP MSS in both tunnel directions (default on)',
+         clamp_out in out and clamp_in in out, out)
+    down = _dry_run_capture(lambda: teardown_nat(cfg, dry_run=True))
+    test('teardown removes both MSS clamp rules',
+         clamp_out.replace('-A', '-D') in down and clamp_in.replace('-A', '-D') in down, down)
+    off = _dry_run_capture(lambda: setup_nat({**cfg, 'mss_clamp': False}, dry_run=True))
+    test('mss_clamp: false omits the mangle rules', 'TCPMSS' not in off, off)
+
+
+def test_client_ipv6_blackhole():
+    from client.net_config import apply_tunnel_net, restore_tunnel_net
+    cfg = {'gateway': '10.8.0.1', 'tun_name': 'tun0', 'route_metric': 50, 'dns_servers': '10.8.0.1'}
+    out = _dry_run_capture(lambda: apply_tunnel_net(cfg, dry_run=True))
+    test('client blackholes the IPv6 default while connected (leak guard)',
+         'ip -6 route add blackhole default metric 50' in out, out)
+    off = _dry_run_capture(lambda: apply_tunnel_net({**cfg, 'block_ipv6': False}, dry_run=True))
+    test('block_ipv6: false leaves IPv6 alone', 'ip -6 route' not in off, off)
+    down = _dry_run_capture(lambda: restore_tunnel_net(
+        {'route': True, 'dns_method': None, 'ipv6_blackhole': True}, cfg, dry_run=True))
+    test('restore removes the IPv6 blackhole',
+         'ip -6 route del blackhole default metric 50' in down, down)
+    noop = _dry_run_capture(lambda: restore_tunnel_net(
+        {'route': False, 'dns_method': None}, cfg, dry_run=True))
+    test('restore is a no-op for IPv6 when it was never applied', 'ip -6' not in noop, noop)
+
+
 if __name__ == '__main__':
     print('=== PQ-VPN net_config Tests ===')
     print()
@@ -255,6 +287,8 @@ if __name__ == '__main__':
     test_server_nat_disabled()
     test_server_persist_sysctl()
     test_server_teardown_nat()
+    test_server_mss_clamp()
+    test_client_ipv6_blackhole()
     test_server_dnsmasq_config()
     test_client_route_command()
     test_client_dns_skip_env()

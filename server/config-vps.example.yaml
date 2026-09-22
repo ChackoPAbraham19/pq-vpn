@@ -27,3 +27,4 @@ max_clients: 3               # data ports 14431..14433 (data_port_base + slot) â
 data_port_base: 14431
 welcome_rate: 1.0            # welcome-port token bucket per source IP
 welcome_burst: 3
+mss_clamp: true          # TCPMSS clamp on the tunnel forward path (PMTU blackholes)

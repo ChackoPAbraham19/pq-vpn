@@ -63,9 +63,16 @@ echo "== 4/5 firewall: welcome + data ports =="
 PORT="$(grep -E '^port:' "$PDIR/server/config-vps.yaml" 2>/dev/null | awk '{print $2}' || true)"
 BASE="$(grep -E '^data_port_base:' "$PDIR/server/config-vps.yaml" 2>/dev/null | awk '{print $2}' || true)"
 MAXC="$(grep -E '^max_clients:' "$PDIR/server/config-vps.yaml" 2>/dev/null | awk '{print $2}' || true)"
-PORT="${PORT:-14430}"; BASE="${BASE:-14431}"; MAXC="${MAXC:-3}"
+EGRESS="$(grep -E '^outbound_iface:' "$PDIR/server/config-vps.yaml" 2>/dev/null | awk '{print $2}' || true)"
+TUN="$(grep -E '^tun_name:' "$PDIR/server/config-vps.yaml" 2>/dev/null | awk '{print $2}' || true)"
+PORT="${PORT:-14430}"; BASE="${BASE:-14431}"; MAXC="${MAXC:-3}"; EGRESS="${EGRESS:-eth0}"; TUN="${TUN:-tun0}"
 LAST=$((BASE + MAXC - 1))
-remote "command -v ufw >/dev/null && { ufw allow ${PORT}/tcp >/dev/null; ufw allow ${BASE}:${LAST}/tcp >/dev/null; ufw --force enable >/dev/null; ufw status | grep -E '${PORT}|${BASE}'; } || echo 'ufw not installed; rely on the cloud security group'"
+# ufw's FORWARD policy is DROP. The daemon's own ACCEPT rules are appended after
+# ufw's chains and do work, but a `ufw reload` flushes them; `ufw route allow`
+# is the durable, explicit form and stays scoped to tunnel<->egress.
+remote "command -v ufw >/dev/null && { ufw allow ${PORT}/tcp >/dev/null; ufw allow ${BASE}:${LAST}/tcp >/dev/null; \
+ufw route allow in on ${TUN} out on ${EGRESS} >/dev/null; ufw route allow in on ${EGRESS} out on ${TUN} >/dev/null; \
+ufw --force enable >/dev/null; ufw status | grep -E '${PORT}|${BASE}|${TUN}'; } || echo 'ufw not installed; rely on the cloud security group'"
 echo "   (cloud security group must also allow TCP ${PORT} and ${BASE}-${LAST} from your client IPs)"
 
 echo "== 5/5 systemd service =="

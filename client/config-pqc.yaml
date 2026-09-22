@@ -12,3 +12,4 @@ backoff_max: 30.0
 resume_cache: true
 handshake_timeout: 10
 client_name: client     # default client issued by pki/gen_*_ca.sh
+block_ipv6: true         # blackhole IPv6 default while connected (tunnel is IPv4-only)

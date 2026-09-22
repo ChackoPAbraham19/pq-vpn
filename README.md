@@ -65,9 +65,10 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
   client from a real CA database; `pki/revoke_client.sh <mode> <name> --kick` puts it
   on the CRL every new session checks and ends the live tunnel. Works for both PKIs
   (the CRL is ML-DSA-65-signed in PQC mode).
-- **Real networking** — NAT MASQUERADE + FORWARD rules, dnsmasq on the tunnel, default
-  route via tun0 with a pinned `/32` transport route, DNS via `resolvectl` or
-  `resolv.conf`, all restored on exit.
+- **Real networking** — NAT MASQUERADE + FORWARD rules, TCP MSS clamping, dnsmasq on
+  the tunnel, default route via tun0 with a pinned `/32` transport route, IPv6 leak
+  guard, DNS via `resolvectl` or `resolv.conf`, all restored on exit. `demo.sh --egress`
+  proves a client reaches the real internet *through* the tunnel.
 - **TLS session tickets** — cached per server and offered on reconnect (`Reused` verified
   for both modes in the benchmark; see limitations).
 - **Tooling** — `vpnctl` CLI over Unix-socket IPC; FastAPI + WebSocket **dashboard** with

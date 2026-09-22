@@ -22,3 +22,4 @@ resume_cache: true
 handshake_timeout: 10
 client_name: laptop          # issued on the CA host: bash pki/issue_client.sh pqc laptop
                              # then copy pki/certs/pqc/{ca.crt,clients/laptop.crt,clients/laptop.key}
+block_ipv6: true         # blackhole IPv6 default while connected (tunnel is IPv4-only)

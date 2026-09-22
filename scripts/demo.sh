@@ -16,6 +16,8 @@ set -euo pipefail
 #        --clients <1..3>         (default 1, max 3)
 #        --dry-run                print the plan, run offline checks only
 #        --keep                   don't teardown at the end (leave tunnel up)
+#        --egress                 also curl a public IP-echo service from each
+#                                 client THROUGH the tunnel (needs host internet)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PDIR="$(dirname "$SCRIPT_DIR")"
@@ -25,6 +27,7 @@ MODE="classical"
 NCLIENTS=1
 DRY_RUN=0
 KEEP=0
+EGRESS=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -32,6 +35,7 @@ while [[ $# -gt 0 ]]; do
         --clients) NCLIENTS="$2"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         --keep) KEEP=1; shift ;;
+        --egress) EGRESS=1; shift ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -221,6 +225,24 @@ for ((i=0; i<NCLIENTS; i++)); do
     fi
     rm -f /tmp/pqvpn-demo-ping.$$
 done
+
+if [[ "$EGRESS" -eq 1 ]]; then
+    log "Egress: public IP as seen from each client, THROUGH the tunnel"
+    HOST_PUB="$(curl -s --max-time 8 https://ifconfig.me || echo '?')"
+    echo "    host itself: ${HOST_PUB}"
+    for ((i=0; i<NCLIENTS; i++)); do
+        ns="vpn_ns$((i+2))"
+        # Clients skip DNS management in the harness, so resolve on the host and
+        # curl by IP — the request itself still goes tun0 -> TLS -> server -> NAT.
+        ECHO_IP="$(getent ahostsv4 ifconfig.me | awk 'NR==1{print $1}')"
+        got="$(ip netns exec "$ns" curl -s --max-time 10 -H 'Host: ifconfig.me' "http://${ECHO_IP}/ip" || echo 'FAILED')"
+        if [[ "$got" == "$HOST_PUB" && -n "$got" ]]; then
+            echo "    ${ns}: ${got}  (matches host: traffic left via the tunnel + NAT)"
+        else
+            fail "${ns}: got '${got}' (expected ${HOST_PUB})"
+        fi
+    done
+fi
 
 log "Step 5/5: vpnctl status"
 sleep 1

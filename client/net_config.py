@@ -103,9 +103,18 @@ def current_default_route(dry_run=False) -> tuple[str, str] | None:
     return None
 
 
+def _ipv6_enabled() -> bool:
+    try:
+        with open('/proc/sys/net/ipv6/conf/all/disable_ipv6') as f:
+            return f.read().strip() == '0'
+    except OSError:
+        return False
+
+
 def apply_tunnel_net(config: dict, dry_run=False) -> dict:
     """Push default route + DNS. Returns a snapshot of applied state."""
-    applied: dict = {'route': False, 'dns_method': None, 'protect': None}
+    applied: dict = {'route': False, 'dns_method': None, 'protect': None,
+                     'ipv6_blackhole': False}
     gateway = config.get('gateway', '10.8.0.1')
     tun_name = config.get('tun_name', 'tun0')
     metric = config.get('route_metric', 50)
@@ -127,6 +136,15 @@ def apply_tunnel_net(config: dict, dry_run=False) -> dict:
         _run(['ip', 'route', 'add', 'default', 'via', gateway, 'dev', tun_name,
               'metric', str(metric)], dry_run=dry_run, check=True)
         applied['route'] = True
+
+    # The tunnel carries IPv4 only. On a host with IPv6 connectivity, v6-capable
+    # sites would be reached OUTSIDE the tunnel with the real address — the
+    # classic VPN leak. Blackhole the v6 default at a better metric than any
+    # RA-installed route while connected; restore_tunnel_net removes it.
+    if config.get('block_ipv6', True) and (dry_run or _ipv6_enabled()):
+        _run(['ip', '-6', 'route', 'add', 'blackhole', 'default', 'metric', str(metric)],
+             dry_run=dry_run, check=False)
+        applied['ipv6_blackhole'] = True
 
     # --- DNS, in strict precedence order: env skip -> resolved liveness ->
     # file fallback (memoized). Each dead path is probed once per process,
@@ -220,6 +238,10 @@ def restore_tunnel_net(applied: dict, config: dict, dry_run=False):
     if applied.get('route'):
         _run(['ip', 'route', 'del', 'default', 'via', gateway, 'dev', tun_name,
               'metric', str(metric)], dry_run=dry_run, check=False)
+
+    if applied.get('ipv6_blackhole'):
+        _run(['ip', '-6', 'route', 'del', 'blackhole', 'default', 'metric', str(metric)],
+             dry_run=dry_run, check=False)
 
     if applied.get('dns_method') == 'resolvectl' and _has_resolvectl():
         _run(['resolvectl', 'revert', tun_name], dry_run=dry_run, check=False)

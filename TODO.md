@@ -208,6 +208,14 @@
 - [x] Item 3 (cross-restart resumption) deferred with the precise reason in architecture.md: `s_server` cannot load a ticket key → needs a custom TLS server
 - [x] netns run (2026-09-22): `revoke_client.sh pqc ns3 --kick` → CRL serial 1001, `Disconnected 'ns3': session(s) [2]`, ns3 reconnect got `SSL alert number 44 … certificate revoked` and stayed in backoff, `client` pinged at 0% loss, reissue refused until the revoked file is removed
 
+## Phase 7a2: internet-egress hardening (pre-VPS) [completed]
+- [x] Server TCP MSS clamp on the forward path both ways (`mss_clamp`, default on) — PMTU blackholes through the 1400-byte tunnel
+- [x] Client IPv6 blackhole while connected (`block_ipv6`, default on) — no v6 leak around the IPv4-only tunnel
+- [x] `deploy_vps.sh`: `ufw route allow` tunnel↔egress both ways (durable across `ufw reload`)
+- [x] `setup_routing.sh`: host NATs the server namespace out the uplink; `demo.sh --egress` curls a public IP-echo from each client through the tunnel
+- [x] `common/test_net_config.py` 25/25
+- [ ] netns run: `demo.sh --mode pqc --clients 2 --egress` shows the host's public IP from each client; mangle TCPMSS rules present in vpn_ns1; v6 blackhole present in vpn_ns2 while up, gone after teardown
+
 ## Phase 7b: Capstone — run on a real VPS (payment, LAST) [pending]
 - [ ] Buy x86 VPS (Ubuntu 24.04); `bash scripts/deploy_vps.sh user@<ip>`
 - [ ] Cloud security group: TCP 14430 + 14431–14433 from client IPs
