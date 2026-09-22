@@ -134,13 +134,13 @@
   .table-empty code { font-family: var(--mono); font-size: 13px; }
 
   /* ---------- client daemons ---------- */
-  .clients { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .clients { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
   .client { border: 1px solid var(--line-soft); border-radius: 10px; padding: 14px 16px; background: var(--page); }
   .client h3 { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .client h3 .state { margin-left: auto; font-weight: 400; color: var(--ink-2); font-size: 14px; }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; font-size: 14px; }
-  .kv dt { color: var(--ink-3); }
-  .kv dd { color: var(--ink); text-align: right; white-space: nowrap; }
+  .kv dt { color: var(--ink-3); white-space: nowrap; }
+  .kv dd { color: var(--ink); text-align: right; overflow-wrap: anywhere; }
   .kv dd.m { font-family: var(--mono); font-size: 13px; }
 
   /* ---------- events ---------- */
@@ -212,7 +212,9 @@ const KB = 1024, MB = KB * 1024, GB = MB * 1024;
 const fmtBytes = n => n >= GB ? (n / GB).toFixed(2) + ' GB' : n >= MB ? (n / MB).toFixed(1) + ' MB' : n >= KB ? (n / KB).toFixed(0) + ' kB' : n + ' B';
 const fmtRate = bps => bps >= MB ? (bps / MB).toFixed(1) + ' MB/s' : (bps / KB).toFixed(0) + ' kB/s';
 const fmtDur = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`;
-const MAX_POINTS = 120;   // 60 s at the 0.5 s poll
+const WINDOW_MS = 60_000;      // throughput chart keeps exactly this much history
+const SPARK_MS = 15_000;       // per-tunnel sparklines
+const HARD_CAP = 400;          // memory guard only; time pruning is the real limit
 const hms = (d = new Date()) => d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 // ---------- events
@@ -314,9 +316,13 @@ function updateThroughput(s, now) {
   const d = tp.data;
   d.labels.push(new Date(now).toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' }));
   d.datasets[0].data.push(rin); d.datasets[1].data.push(rout);
-  if (d.labels.length > MAX_POINTS) { d.labels.shift(); d.datasets.forEach(ds => ds.data.shift()); }
+  tpTimes.push(now);
+  // Prune by time, not count: the poller's cadence is ~0.5 s plus IPC, so a
+  // fixed point count drifted to 65-70 s of history.
+  while (tpTimes.length > 2 && (tpTimes[0] < now - WINDOW_MS || tpTimes.length > HARD_CAP)) {
+    tpTimes.shift(); d.labels.shift(); d.datasets.forEach(ds => ds.data.shift());
+  }
   tp.update('none');
-  tpTimes.push(now); if (tpTimes.length > MAX_POINTS) tpTimes.shift();
   if (tpTimes.length > 2) $('tp-span').textContent = `last ${Math.round((tpTimes[tpTimes.length - 1] - tpTimes[0]) / 1000)} s`;
   $('now-in').innerHTML = `${(rin / MB).toFixed(1)}<small>MB/s</small>`;
   $('now-out').innerHTML = `${(rout / MB).toFixed(1)}<small>MB/s</small>`;
@@ -334,9 +340,10 @@ function sparkline(canvas, hist, color) {
   const g = canvas.getContext('2d'); g.scale(dpr, dpr);
   g.clearRect(0, 0, w, h);
   if (hist.length < 2) return;
-  const max = Math.max(...hist, 1);
+  const max = Math.max(...hist.map(p => p.v), 1);
+  const t0 = hist[0].t, span = Math.max(hist[hist.length - 1].t - t0, 1);
   g.strokeStyle = color; g.lineWidth = 1.5; g.lineJoin = 'round'; g.beginPath();
-  hist.forEach((v, i) => { const x = i / (hist.length - 1) * (w - 2) + 1; const y = h - 2 - (v / max) * (h - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  hist.forEach((p, i) => { const x = (p.t - t0) / span * (w - 2) + 1; const y = h - 2 - (p.v / max) * (h - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
   g.stroke();
 }
 function renderTunnels(server, now) {
@@ -351,7 +358,7 @@ function renderTunnels(server, now) {
     const was = perClient.get(c.id) || { t: now, in: c.bytes_in, out: c.bytes_out, hist: [] };
     const dt = Math.max((now - was.t) / 1000, 0.01);
     const rate = perClient.has(c.id) ? Math.max(0, (c.bytes_in + c.bytes_out - was.in - was.out) / dt) : 0;
-    const hist = was.hist.concat(rate).slice(-30);
+    const hist = was.hist.concat({ t: now, v: rate }).filter(p => p.t >= now - SPARK_MS).slice(-HARD_CAP);
     perClient.set(c.id, { t: now, in: c.bytes_in, out: c.bytes_out, hist });
     const shareIn = c.bytes_in / total * 100, shareOut = c.bytes_out / total * 100;
     const stale = c.idle_seconds > 20;
