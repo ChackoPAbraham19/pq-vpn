@@ -12,8 +12,8 @@ apples-to-apples on the same tunnel.
 ("harvest now, decrypt later"). NIST finalised the replacement algorithms (FIPS 203/204)
 in 2024; this project puts them in a complete VPN and measures what they cost.
 
-**Result:** post-quantum security adds ~10 ms to the one-time handshake and **nothing**
-to steady-state latency or throughput.
+**Result:** post-quantum security costs about 1.8x on the one-time handshake
+(≈12 ms on this host) and **nothing** on steady-state latency or throughput.
 
 ## Quick start
 
@@ -43,7 +43,7 @@ PQVPN_DASH_TOKEN=mytoken .venv/bin/python3 dashboard/dashboard_server.py   # htt
 
 ## What's implemented
 
-Everything below is exercised by the unit suites (**126 tests**, `demo.sh --dry-run`) and
+Everything below is exercised by the unit suites (**142 tests**, `demo.sh --dry-run`) and
 was verified live in the network-namespace harness with 2–3 concurrent PQC clients.
 
 - **Dual-mode PKI** — ECDSA P-256 chain and ML-DSA-65 chain, both with mutual TLS.
@@ -99,8 +99,8 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
 
 | Metric | Classical | PQC | Overhead |
 |--------|-----------|-----|----------|
-| **TLS handshake** (median) | 15.0 ms | 25.4 ms | 1.70× |
-| **Resumed handshake** (median) | 13.5 ms | 23.7 ms | ~1.0× |
+| **TLS handshake** (median, n=125) | 15.8 ms | 28.0 ms | 1.77× |
+| **Resumed handshake** (median, n=60) | 11.8 ms | 20.3 ms | 1.08–1.12× vs full |
 | **Ping RTT through tunnel** | 2.29 ms | 2.33 ms | 1.7 % |
 | **TCP throughput** (iperf3) | 1268 Mbps | 533 Mbps | run variance |
 | **UDP throughput** | 999.9 Mbps | 999.9 Mbps | 0 % |
@@ -108,8 +108,10 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
 
 Larger certificates and key shares make the one-time handshake slower; the data plane
 is unaffected (throughput is bounded by the Python relay, not the crypto). Live
-3-client run: ~1 ms ping, 0.5–1 Gbps per client concurrently. Methodology, raw CSVs and
-plots: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+3-client run: ~1 ms ping, 0.5–1 Gbps per client concurrently. Absolute handshake times
+on this desktop vary with load — the **ratio** between modes is the stable result, so
+the figures above pool several repetitions and `docs/BENCHMARKS.md` states the spread.
+Methodology, raw CSVs and plots: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## Project structure
 

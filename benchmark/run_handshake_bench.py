@@ -158,7 +158,7 @@ def run_benchmark(mode: str, config_dir: str | None = None, trials: int = 20,
 
 
 def run_resumption_benchmark(mode: str, config_dir: str | None = None,
-                             trials: int = 20, sess=None):
+                             trials: int = 20, sess=None, out_dir: str | None = None):
     """Benchmark full vs resumed handshakes against one long-lived s_server.
 
     `sess` is a path to a ticket file. Conn 1 primes the ticket (full handshake,
@@ -214,8 +214,12 @@ def run_resumption_benchmark(mode: str, config_dir: str | None = None,
     server_proc.terminate()
     server_proc.wait()
 
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    csv_path = os.path.join(RESULTS_DIR, f'handshake_resume_{mode}.csv')
+    # Honour --out-dir here too: without this a --resume run always wrote into
+    # benchmark/results/, so the guard that keeps dry-runs off the committed
+    # CSVs only worked for the non-resume path.
+    out_dir = out_dir or RESULTS_DIR
+    os.makedirs(out_dir, exist_ok=True)
+    csv_path = os.path.join(out_dir, f'handshake_resume_{mode}.csv')
     with open(csv_path, 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['trial_id', 'mode', 'kind', 'ms'])
@@ -254,13 +258,18 @@ def main():
     for mode in args.modes:
         if args.resume:
             print(f'Benchmarking full-vs-resumed handshake: {mode}')
+            # The ticket lives beside the CSVs; create the directory first or
+            # `s_client -sess_out` fails (rc=2) and every resumed trial falls
+            # back to a full handshake, silently ruining the comparison.
+            os.makedirs(args.out_dir, exist_ok=True)
             ticket = os.path.join(args.out_dir, f'{mode}.tick')
             try:
                 os.remove(ticket)
             except FileNotFoundError:
                 pass
             run_resumption_benchmark(mode, os.path.join(PROJECT_DIR, 'pki'),
-                                     trials=args.trials, sess=ticket)
+                                     trials=args.trials, sess=ticket,
+                                     out_dir=args.out_dir)
         else:
             print(f'Benchmarking handshake: {mode}')
             config_dir = os.path.join(PROJECT_DIR, 'pki')

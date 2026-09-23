@@ -160,7 +160,8 @@ sudo ip netns exec vpn_ns2 ping -c 5 10.8.0.1
 
 > **Note (Phase 1):** With `nat: true` / `dnsmasq: true` in the server config, the
 > server configures IP forwarding, NAT MASQUERADE, FORWARD rules, and a dnsmasq
-> listener on tun0; the client pushes a default route (metric 50) and DNS after
+> listener on tun0; the client installs `0.0.0.0/1` + `128.0.0.0/1` via tun0 (they
+> beat any default route regardless of metric) plus DNS after
 > the welcome handshake and restores both on shutdown. (The daemons still need
 > root to open the TUN device, so `--dry-run` on the daemon binary is only useful
 > under sudo; the rootless plumbing preview lives in the unit tests.)
