@@ -235,4 +235,8 @@
       tunnel but lookups use the existing resolver. `sudo chattr -i
       /etc/resolv.conf` before connecting, then re-verify
 - [ ] Two simultaneous clients over the WAN + dashboard via SSH port-forward
-- [ ] Real-WAN handshake benchmark; append numbers to BENCHMARKS.md
+- [x] Real-WAN handshake benchmark (`benchmark/run_wan_handshake_bench.py`,
+      new): full 203 / 327 ms (1.61x, +124 ms at 99 ms RTT) and resumed
+      152.9 / 200.0 ms (PQC saves 72 ms, 1.36x). Finding: the WAN penalty is an
+      extra round trip caused by the certificate flight, not CPU — the opposite
+      of the "WAN dilutes it" expectation. Written up in BENCHMARKS.md §7.

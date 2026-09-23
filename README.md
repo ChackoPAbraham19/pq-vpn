@@ -13,7 +13,10 @@ apples-to-apples on the same tunnel.
 in 2024; this project puts them in a complete VPN and measures what they cost.
 
 **Result:** post-quantum security costs about 1.8x on the one-time handshake
-(≈12 ms on this host) and **nothing** on steady-state latency or throughput.
+(≈12 ms on loopback) and **nothing** on steady-state latency or throughput.
+Measured against a real VPS, the cost turns out to be **one extra round trip**
+— +124 ms at 99 ms RTT — because the larger certificate flight overflows the
+initial congestion window; session resumption recovers most of it.
 
 ## Quick start
 
@@ -105,6 +108,8 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
 | **TCP throughput** (iperf3) | 1268 Mbps | 533 Mbps | run variance |
 | **UDP throughput** | 999.9 Mbps | 999.9 Mbps | 0 % |
 | **100 MB file transfer** | 0.68 s | 1.31 s | run variance |
+| **Handshake over real WAN** (Mumbai VPS) | 203 ms | 327 ms | 1.61× (+124 ms) |
+| **…resumed** | 152.9 ms | 200.0 ms | saves 72 ms |
 
 Larger certificates and key shares make the one-time handshake slower; the data plane
 is unaffected (throughput is bounded by the Python relay, not the crypto). Live

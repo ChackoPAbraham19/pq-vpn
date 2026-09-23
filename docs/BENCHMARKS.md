@@ -154,6 +154,48 @@ The first run of this test found a real leak: the client used to install
 worked while internet traffic silently bypassed the tunnel. The `/1` half-routes
 fix it regardless of the host's metric.
 
+## 7. Real-WAN handshake (laptop → AWS Lightsail, Mumbai)
+
+**Method:** `benchmark/run_wan_handshake_bench.py ubuntu@<vps>` starts a plain
+`openssl s_server` on the VPS over SSH and times `s_client` handshakes from the
+laptop against it — TLS only, the VPN daemon is not involved, so these are
+directly comparable in method to §1. Home Wi-Fi in India to `ap-south-1`.
+Recorded 2026-09-23.
+
+**Full handshake, 25 trials/mode** (TCP round-trip measured at 99.2 ms during
+this run):
+
+| Mode | Median (ms) | Min (ms) | Max (ms) |
+|------|-------------|----------|----------|
+| Classical | 203.0 | 90.8 | 304.4 |
+| PQC | 327.0 | 202.4 | 668.2 |
+
+**PQC = 1.61x, i.e. +124 ms.** Classical's 203 ms is almost exactly two round
+trips (TCP connect + TLS 1.3), as expected. PQC lands near 3.3 round trips.
+
+**This is the opposite of what loopback suggests.** On loopback PQC costs
++12 ms — pure CPU for the bigger certificate and key share. Over a WAN the same
+extra bytes overflow the initial congestion window (ML-DSA-65 chains are
+≈7.5 KB against a ~14 KB initial window, before the key share), so the
+handshake buys an **extra round trip**. At 99 ms per round trip that is the
++124 ms. The post-quantum handshake penalty is therefore a *bandwidth-delay*
+effect on real networks, not a compute effect.
+
+**Full vs resumed, 20 trials/mode** (interleaved against one long-lived server;
+round-trip measured at 51.6 ms during this later run — the path was quieter, so
+compare within this table only):
+
+| Mode | Full median (ms) | Resumed median (ms) | Saved | Speedup |
+|------|------------------|---------------------|-------|---------|
+| Classical | 198.6 | 152.9 | 45.7 ms | 1.30x |
+| PQC | 272.0 | 200.0 | 72.0 ms | 1.36x |
+
+Resumption skips the certificate exchange and recovers most of the penalty —
+and it saves **more** for PQC in absolute terms (72 ms vs 46 ms), which is the
+predicted signature of a certificate-size-driven round trip. On loopback the
+same mechanism looked negligible (§2: PQC 1.08x); over the internet it is the
+single most effective optimisation available to this design.
+
 ## Validation
 
 `bash scripts/demo.sh --dry-run` runs five suites — **142 checks**:
@@ -170,6 +212,8 @@ fix it regardless of the host's metric.
 
 | Metric | Classical → PQC | Verdict |
 |--------|-----------------|---------|
+| WAN full handshake | 1.61x (+124 ms) | An extra round trip, not CPU — the real deployment cost |
+| WAN resumed handshake | saves 72 ms (1.36x) | Resumption matters far more on a WAN than loopback showed |
 | Full handshake | 1.77x slower | Only PQC cost; once per connection/reconnect |
 | Resumed handshake | 1.08x vs 1.12x | Resume minimizes even this; saves WAN RTT |
 | Ping latency | +0.04 ms | Negligible |
@@ -178,9 +222,11 @@ fix it regardless of the host's metric.
 
 Key takeaways:
 
-1. **PQC is practical for VPNs.** The only measurable cost is the one-time
-   handshake (~1.77x), mitigated by TLS session resumption (the daemons resume
-   automatically).
+1. **PQC is practical for VPNs.** The cost is confined to the one-time
+   handshake — 1.77x on loopback (CPU) and 1.61x over a real WAN, where it
+   takes the form of one extra round trip caused by the larger certificate
+   flight. TLS session resumption recovers most of the WAN penalty (72 ms,
+   1.36x) and the daemons resume automatically.
 2. **Steady-state data plane is identical** — both modes use AES-256-GCM; PQC
    only affects the initial key exchange.
 3. **Throughput is bounded by the Python relay** (`select` + `read`/`write`),
@@ -199,8 +245,10 @@ Key takeaways:
   auto-negotiation is not.)
 - **Multi-client scaling** beyond 3 (IP pool, per-client port range) and
   per-client bandwidth QoS.
-- **Live WAN numbers:** re-run handshake/resumption/latency against the Phase 7
-  VPS to capture real-internet overhead (reconnect + resume saving one WAN RTT).
+- **Live WAN numbers:** handshake and resumption are measured (§7). Still open:
+  WAN latency/throughput through the tunnel itself, and whether a smaller
+  certificate chain (ML-DSA-44, or a hybrid with a compressed chain) removes
+  the extra round trip.
 - **Key rotation:** mid-stream rekey is unsupported (no s_server
   renegotiation); reconnect + resume is the workaround.
 
