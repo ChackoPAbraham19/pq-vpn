@@ -25,6 +25,15 @@ _resolved_liveness: bool | None = None
 _resolv_conf_dead = False
 
 
+def _is_immutable(path: str) -> bool:
+    """True if the file carries the immutable attribute (chattr +i)."""
+    try:
+        out = subprocess.run(['lsattr', '-d', path], capture_output=True, text=True)
+        return out.returncode == 0 and 'i' in out.stdout.split()[0]
+    except (OSError, IndexError):
+        return False
+
+
 def _dns_skip_requested() -> bool:
     return os.environ.get('PQVPN_SKIP_DNS', '').strip().lower() in ('1', 'true', 'yes')
 
@@ -221,8 +230,14 @@ def _set_resolv_conf(dns_servers, dry_run=False) -> str | None:
         return 'resolv.conf'
     except OSError as e:
         _resolv_conf_dead = True  # one clean line per process, ever
-        print(f'[net_config] DNS not applied (resolv.conf write blocked: {e}); '
-              'tunnel still usable by IP', file=sys.stderr)
+        hint = ''
+        if _is_immutable(RESOLV_CONF):
+            # chattr +i beats even root; a bare EPERM gives no clue why.
+            hint = (f' — {RESOLV_CONF} is marked immutable; '
+                    f'`sudo chattr -i {RESOLV_CONF}` to let the tunnel set DNS')
+        print(f'[net_config] DNS not applied (resolv.conf write blocked: {e})'
+              f'{hint}. Traffic still routes through the tunnel, but DNS '
+              'lookups will use the existing resolver.', file=sys.stderr)
         try:
             os.remove(tmp)
         except OSError:

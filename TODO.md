@@ -218,8 +218,21 @@
 - [x] Found by the first `--egress` run: the client's `default … metric 50` lost to the harness's metric-0 default → internet traffic bypassed the tunnel while pings to the server worked. Fixed: client now installs `0.0.0.0/1` + `128.0.0.0/1` via tun0 (beats any default regardless of metric)
 - [x] netns run (2026-09-22): `demo.sh --mode pqc --clients 2 --egress` → both clients see the host's public IP through the tunnel; `curl https://ifconfig.me/ip` from vpn_ns2 (DNS + HTTPS by hostname, inside the tunnel) prints it too; /1 half-routes above the metric-0 default in `ip route`
 
-## Phase 7b: Capstone — run on a real VPS (payment, LAST) [pending]
-- [ ] Buy x86 VPS (Ubuntu 24.04); `bash scripts/deploy_vps.sh user@<ip>`
-- [ ] Cloud security group: TCP 14430 + 14431–14433 from client IPs
-- [ ] Real-WAN handshake, `curl ifconfig.me` = VPS IP, DNS via tunnel, 2 clients, dashboard
-- [ ] Append real-WAN numbers to BENCHMARKS.md
+## Phase 7b: Capstone — run on a real VPS [in progress]
+- [x] AWS Lightsail 1 GB Ubuntu 24.04 (ap-south-1, static IP 203.0.113.5) + 2 GB swap; `bash scripts/deploy_vps.sh ubuntu@<ip>` deployed clean in ~35 min with BUILD_JOBS=1
+- [x] Lightsail firewall: TCP 22 + 14430–14433, Anywhere IPv4
+- [x] Real-WAN tunnel (2026-09-23): PQC handshake to the VPS verified live —
+      `Signature type: mldsa65`, TLSv1.3, X25519MLKEM768; `curl ifconfig.me`
+      returns the VPS IP (203.0.113.5) from the laptop, `https://www.google.com`
+      returns HTTP 200 through the tunnel
+- [x] Found on the first deploy attempt: `deploy_vps.sh` enabled ufw without an
+      SSH allow rule and locked the instance out (Lightsail has no serial
+      console; its browser terminal is SSH too). Fixed — SSH is allowed first
+      and the script verifies SSH still answers, refusing to leave ufw enabled
+      without a rule.
+- [ ] DNS through the tunnel on this laptop: blocked because `/etc/resolv.conf`
+      carries the immutable flag (`chattr +i`). Traffic routes through the
+      tunnel but lookups use the existing resolver. `sudo chattr -i
+      /etc/resolv.conf` before connecting, then re-verify
+- [ ] Two simultaneous clients over the WAN + dashboard via SSH port-forward
+- [ ] Real-WAN handshake benchmark; append numbers to BENCHMARKS.md
