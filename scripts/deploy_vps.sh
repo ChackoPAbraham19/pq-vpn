@@ -73,12 +73,38 @@ EGRESS="$(grep -E '^outbound_iface:' "$PDIR/server/config-vps.yaml" 2>/dev/null 
 TUN="$(grep -E '^tun_name:' "$PDIR/server/config-vps.yaml" 2>/dev/null | awk '{print $2}' || true)"
 PORT="${PORT:-14430}"; BASE="${BASE:-14431}"; MAXC="${MAXC:-3}"; EGRESS="${EGRESS:-eth0}"; TUN="${TUN:-tun0}"
 LAST=$((BASE + MAXC - 1))
+# SSH FIRST, ALWAYS. `ufw --force enable` applies the default deny-incoming
+# policy immediately; without an SSH rule already in place it locks the
+# operator out of the box the moment it runs, and on a provider with no serial
+# console (Lightsail) the only recovery is a snapshot rebuild. Learned the
+# hard way on 2026-09-22.
+#
 # ufw's FORWARD policy is DROP. The daemon's own ACCEPT rules are appended after
 # ufw's chains and do work, but a `ufw reload` flushes them; `ufw route allow`
 # is the durable, explicit form and stays scoped to tunnel<->egress.
-remote "command -v ufw >/dev/null && { ufw allow ${PORT}/tcp >/dev/null; ufw allow ${BASE}:${LAST}/tcp >/dev/null; \
+if [[ "$DRY" -eq 1 ]]; then
+    SSH_PORT=22
+else
+    SSH_PORT="$(ssh -o ConnectTimeout=10 "$TARGET" "sudo sshd -T 2>/dev/null | awk '/^port /{print \$2; exit}'" 2>/dev/null || true)"
+    SSH_PORT="${SSH_PORT:-22}"
+fi
+echo "   keeping SSH reachable on port ${SSH_PORT} before enabling ufw"
+remote "command -v ufw >/dev/null && { \
+ufw allow ${SSH_PORT}/tcp >/dev/null; \
+ufw allow ${PORT}/tcp >/dev/null; ufw allow ${BASE}:${LAST}/tcp >/dev/null; \
 ufw route allow in on ${TUN} out on ${EGRESS} >/dev/null; ufw route allow in on ${EGRESS} out on ${TUN} >/dev/null; \
-ufw --force enable >/dev/null; ufw status | grep -E '${PORT}|${BASE}|${TUN}'; } || echo 'ufw not installed; rely on the cloud security group'"
+ufw --force enable >/dev/null; \
+ufw status | grep -qE '(^| )${SSH_PORT}/tcp' || { echo 'REFUSING to leave ufw enabled without an SSH rule' >&2; ufw --force disable; exit 1; }; \
+ufw status | grep -E '${SSH_PORT}|${PORT}|${BASE}|${TUN}'; } || echo 'ufw not installed; rely on the cloud security group'"
+# Prove SSH still works before moving on; if it does not, the next step would
+# hang and the operator would be locked out with no signal about why.
+if [[ "$DRY" -eq 0 ]]; then
+    if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$TARGET" true 2>/dev/null; then
+        echo "!! SSH no longer reachable after enabling ufw — aborting before further changes" >&2
+        exit 1
+    fi
+    echo "   SSH still reachable after enabling ufw"
+fi
 echo "   (cloud security group must also allow TCP ${PORT} and ${BASE}-${LAST} from your client IPs)"
 
 echo "== 5/5 systemd service =="

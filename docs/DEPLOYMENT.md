@@ -142,8 +142,19 @@ What it does on the VPS, in order:
    takes ~35–45 min and leaves the box usable. `BUILD_JOBS=0 bash scripts/deploy_vps.sh …`
    uses all cores on a dedicated-CPU host.
 3. `python3 -m venv .venv` + `requirements.txt`; apt `iproute2 iptables dnsmasq`.
-4. `ufw allow` for the welcome port and `data_port_base..data_port_base+max_clients-1`
-   (read from your config; 14430 + 14431–14433 by default).
+4. `ufw allow` for **SSH first**, then the welcome port and
+   `data_port_base..data_port_base+max_clients-1` (read from your config;
+   14430 + 14431–14433 by default), then enables ufw — and verifies SSH still
+   answers before continuing, refusing to leave ufw enabled without an SSH rule.
+
+   > **Why the order matters.** `ufw --force enable` applies the default
+   > `deny (incoming)` policy the instant it runs. Enabling it without an SSH
+   > rule already present locks you out of the machine immediately, and on a
+   > provider with no serial console (AWS Lightsail among them) the browser
+   > terminal fails too, because it is also SSH. Recovery then means taking a
+   > snapshot and rebuilding the instance. This happened during development on
+   > 2026-09-22; the script now allows SSH first and aborts if a post-enable
+   > connection check fails.
 5. Install `deploy/pqvpn-server.service`, `systemctl enable --now pqvpn-server`,
    print `systemctl status` and `vpnctl status server`.
 
@@ -171,6 +182,26 @@ curl ifconfig.me                                             # => VPS IP
 ```
 
 Unlike the netns harness, leave `PQVPN_SKIP_DNS` unset so the pushed DNS is applied.
+
+### 6.4-lockout If you do lock yourself out of a Lightsail instance
+
+Lightsail has no serial console and its browser terminal is SSH, so a ufw
+lockout blocks every in-band path. Recovery without losing the built stack:
+
+1. Instance → **Snapshots** → create a snapshot (works while the OS is
+   unreachable; it is a disk-level copy).
+2. **Create instance from snapshot**, and under *Advanced settings* add a
+   **launch script** that runs before you need to log in:
+   ```bash
+   ufw --force disable
+   systemctl restart ssh
+   ```
+3. Attach the static IP to the new instance and SSH in. `/opt/openssl-pqc` and
+   everything else survives, so only the final deploy step has to be re-run.
+
+If the launch script is unavailable on your snapshot flow, delete and recreate
+the instance and re-run `scripts/deploy_vps.sh`; with `BUILD_JOBS=1` the stack
+rebuild takes ~35–45 min.
 
 ### 6.4a Adding and banning clients
 
