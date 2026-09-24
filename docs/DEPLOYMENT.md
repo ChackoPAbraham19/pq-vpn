@@ -251,7 +251,12 @@ Three things a full-tunnel VPN needs beyond "packets get across", all on by defa
   client blackholes its IPv6 default route while connected — otherwise v6-capable
   sites are reached outside the tunnel with the real address. Removed on disconnect.
 - **DNS through the tunnel**: the pushed resolver is `dnsmasq` on the server's tunnel
-  address, so lookups never leave via the home network.
+  address, so lookups never leave via the home network. This needs
+  `ufw allow in on tun0` **in addition to** the `ufw route allow` rules: `route
+  allow` governs traffic forwarded *through* the box, while dnsmasq runs *on* it.
+  Without that rule clients browse normally but every DNS query to the server
+  times out, and because ufw still answers ICMP the tunnel looks healthy —
+  `ping 10.8.0.1` succeeds while `dig @10.8.0.1` does not. `deploy_vps.sh` adds it.
 
 Acceptance test on a real client: `curl ifconfig.me` prints the VPS IP,
 `curl -6 --max-time 5 ifconfig.me` fails (leak closed), and

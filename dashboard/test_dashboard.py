@@ -23,6 +23,51 @@ def test(name, ok, detail=''):
             print(f'    {detail}')
 
 
+class isolated_sockets:
+    """Point every IPC socket path at a private temp dir for the duration.
+
+    Without this, tests that assert on "the sockets that exist" read the real
+    /tmp/pqvpn-*.sock and fail whenever a genuine daemon happens to be running
+    on the developer's machine — which is exactly when someone is least likely
+    to suspect the test harness. `demo.sh --dry-run` runs these suites, so a
+    live tunnel used to make it report failures.
+    """
+
+    def __enter__(self):
+        import common.daemon_utils as du
+        import dashboard.dashboard_server as ds
+        self._du, self._ds = du, ds
+        self._tmp = tempfile.TemporaryDirectory()
+        root = self._tmp.name
+
+        def sock(role, instance=None):
+            name = f'pqvpn-{role}' + (f'-{instance}' if instance else '') + '.sock'
+            return os.path.join(root, name)
+
+        def pid(role, instance=None):
+            name = f'pqvpn-{role}' + (f'-{instance}' if instance else '') + '.pid'
+            return os.path.join(root, name)
+
+        def discover(role):
+            import glob as _glob
+            paths = sorted(_glob.glob(os.path.join(root, f'pqvpn-{role}-*.sock')))
+            legacy = sock(role)
+            if os.path.exists(legacy):
+                paths.insert(0, legacy)
+            return paths
+
+        self._saved = (du.socket_path, du.pid_path, ds.socket_path, ds.discover_sockets)
+        du.socket_path, du.pid_path = sock, pid
+        ds.socket_path, ds.discover_sockets = sock, discover
+        return root
+
+    def __exit__(self, *exc):
+        du, ds = self._du, self._ds
+        du.socket_path, du.pid_path, ds.socket_path, ds.discover_sockets = self._saved
+        self._tmp.cleanup()
+        return False
+
+
 def test_ipc_command_envelope():
     """IpcServer: a command request returns {'status':..., 'result':...}; bare stays compatible."""
     from common.daemon_utils import IpcServer, StatusTracker, ipc_request, socket_path
@@ -129,14 +174,16 @@ def test_feed_under_missing_sockets():
     """With no daemon sockets present, the feed must not crash."""
     import dashboard.dashboard_server as ds
 
-    feed = ds.StatusFeed(interval=0.05)
-    feed.start()
-    time.sleep(0.2)
-    feed.stop()
-    feed._thread.join(timeout=2)
+    with isolated_sockets():
+        feed = ds.StatusFeed(interval=0.05)
+        feed.start()
+        time.sleep(0.2)
+        feed.stop()
+        feed._thread.join(timeout=2)
 
-    ok = feed._last is not None and feed._last['server'] is None and feed._last['client'] is None
-    test('feed survives missing daemon sockets', ok, str(feed._last)[:100])
+        ok = (feed._last is not None and feed._last['server'] is None
+              and feed._last['client'] is None)
+        test('feed survives missing daemon sockets', ok, str(feed._last)[:100])
 
 
 def test_multi_instance_ipc():
@@ -197,24 +244,21 @@ def test_feed_sees_client_instances():
     from common.daemon_utils import IpcServer, StatusTracker, socket_path
     import dashboard.dashboard_server as ds
 
-    st = StatusTracker({'mode': 'pqc'}, tun_name='tun0', tun_addr='10.8.0.4/24')
-    ipc = IpcServer(st, role='client', instance='feedtest')
-    ipc.start()
-    try:
-        time.sleep(0.3)
-        snap = ds.StatusFeed(interval=0.05).snapshot()
-        ok_list = len(snap.get('clients') or []) == 1 and \
-            (snap['clients'][0].get('_instance') == 'feedtest')
-        ok_compat = (snap.get('client') or {}).get('_instance') == 'feedtest'
-        test("feed lists instance under 'clients' with _instance tag", ok_list, str(snap)[:140])
-        test("'client' key mirrors first instance (UI compat)", ok_compat)
-    finally:
-        ipc.stop()
-        time.sleep(0.2)
+    with isolated_sockets():
+        st = StatusTracker({'mode': 'pqc'}, tun_name='tun0', tun_addr='10.8.0.4/24')
+        ipc = IpcServer(st, role='client', instance='feedtest')
+        ipc.start()
         try:
-            _os.remove(socket_path('client', 'feedtest'))
-        except FileNotFoundError:
-            pass
+            time.sleep(0.3)
+            snap = ds.StatusFeed(interval=0.05).snapshot()
+            ok_list = len(snap.get('clients') or []) == 1 and \
+                (snap['clients'][0].get('_instance') == 'feedtest')
+            ok_compat = (snap.get('client') or {}).get('_instance') == 'feedtest'
+            test("feed lists instance under 'clients' with _instance tag", ok_list, str(snap)[:140])
+            test("'client' key mirrors first instance (UI compat)", ok_compat)
+        finally:
+            ipc.stop()
+            time.sleep(0.2)
 
 
 def test_single_poller():

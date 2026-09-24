@@ -82,6 +82,13 @@ LAST=$((BASE + MAXC - 1))
 # ufw's FORWARD policy is DROP. The daemon's own ACCEPT rules are appended after
 # ufw's chains and do work, but a `ufw reload` flushes them; `ufw route allow`
 # is the durable, explicit form and stays scoped to tunnel<->egress.
+#
+# `ufw allow in on <tun>` is separate and also required: `route allow` only
+# covers traffic being FORWARDED through the box, while dnsmasq runs ON it and
+# listens on the tunnel address. Without this, clients route fine but every DNS
+# query to the server times out — ufw's INPUT policy drops them (ICMP still
+# answers, which makes the tunnel look healthy). Found on the live VPS
+# 2026-09-24.
 if [[ "$DRY" -eq 1 ]]; then
     SSH_PORT=22
 else
@@ -93,6 +100,7 @@ remote "command -v ufw >/dev/null && { \
 ufw allow ${SSH_PORT}/tcp >/dev/null; \
 ufw allow ${PORT}/tcp >/dev/null; ufw allow ${BASE}:${LAST}/tcp >/dev/null; \
 ufw route allow in on ${TUN} out on ${EGRESS} >/dev/null; ufw route allow in on ${EGRESS} out on ${TUN} >/dev/null; \
+ufw allow in on ${TUN} comment 'VPN clients -> server services (dnsmasq)' >/dev/null; \
 ufw --force enable >/dev/null; \
 ufw status | grep -qE '(^| )${SSH_PORT}/tcp' || { echo 'REFUSING to leave ufw enabled without an SSH rule' >&2; ufw --force disable; exit 1; }; \
 ufw status | grep -E '${SSH_PORT}|${PORT}|${BASE}|${TUN}'; } || echo 'ufw not installed; rely on the cloud security group'"

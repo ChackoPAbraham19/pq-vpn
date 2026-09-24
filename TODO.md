@@ -234,15 +234,18 @@
       `https://www.google.com` HTTP 200 in 0.43 s, `https://1.1.1.1` HTTP 301 in
       0.11 s, ping to the server's tunnel address 22–164 ms. Run with
       `PQVPN_SKIP_DNS=1` (see below).
-- [ ] DNS through the tunnel (server-side dnsmasq) does not answer over the WAN.
-      Established so far: the immutable flag on `/etc/resolv.conf` was the first
-      blocker and is cleared; forwarded traffic works; ICMP to 10.8.0.1 is
-      answered; UDP/53 to 10.8.0.1 times out; adding `ufw allow in on tun0` on
-      the server did not change it. Next step: `tcpdump -ni tun0 port 53` on the
-      server **while the tunnel is up** to tell "query never arrives" from
-      "dnsmasq does not answer". Workaround for demos: run the client with
-      `PQVPN_SKIP_DNS=1` — all traffic still routes through the tunnel, lookups
-      use the host's existing resolver.
+- [x] DNS through the tunnel works (2026-09-24): `dig @10.8.0.1 github.com`
+      answers in 52 ms over the WAN. Two blockers, both fixed: the immutable
+      flag on `/etc/resolv.conf` (`chattr -i`), and the server needing
+      `ufw allow in on tun0` — `ufw route allow` only covers forwarded traffic,
+      while dnsmasq runs on the box itself. ufw still answers ICMP without it,
+      so `ping 10.8.0.1` succeeded while `dig` timed out and the tunnel looked
+      healthy. Now in `deploy_vps.sh`.
+- [ ] Watch: one session was reaped by the server's 45 s idle teardown after
+      ~9 minutes of a live WAN tunnel, which 15 s keepalives should have
+      prevented. Not reproduced since. If it recurs, check whether the client's
+      keepalive thread survives a laptop sleep / Wi-Fi drop, since the server
+      only touches `last_seen` on frames it actually receives.
 - [ ] Two simultaneous clients over the WAN + dashboard via SSH port-forward
 - [x] Real-WAN handshake benchmark (`benchmark/run_wan_handshake_bench.py`,
       new): full 203 / 327 ms (1.61x, +124 ms at 99 ms RTT) and resumed
