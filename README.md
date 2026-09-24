@@ -130,7 +130,7 @@ VPN/
 ├── pki/          gen_classical_ca.sh, gen_pqc_ca.sh, OpenSSL configs (certs are git-ignored)
 ├── scripts/      install_custom_openssl.sh, setup_routing.sh (netns), demo.sh, clean_build_check.sh, deploy_vps.sh
 ├── deploy/       pqvpn-server.service (systemd)
-├── benchmark/    bench scripts, results/*.csv, plots
+├── benchmark/    bench scripts (loopback + real-WAN), raw results/*.csv (tracked), plots
 ├── docs/         architecture, BENCHMARKS, DEPLOYMENT, setup, ROADMAP
 └── Dockerfile    clean-build proof from ubuntu:24.04
 ```

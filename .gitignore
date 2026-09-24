@@ -1,9 +1,13 @@
 # Certificates and keys (never commit private key material)
 pki/certs/
 
-# Benchmark raw data — exclude raw CSVs but keep generated plot images
-benchmark/results/*.csv
-!benchmark/results/plots/*.png
+# TLS session tickets written by `s_client -sess_out`. These are SSL SESSION
+# PARAMETERS blobs — key material, not results. Two of them reached the public
+# repo once via `git add -A`; this rule keeps that from recurring.
+*.tick
+
+# Benchmark raw data IS tracked: every table in docs/BENCHMARKS.md must be
+# reproducible from benchmark/results/*.csv by anyone who clones the repo.
 
 # Python
 __pycache__/

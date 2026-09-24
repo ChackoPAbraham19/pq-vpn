@@ -28,9 +28,11 @@ for context.
 import argparse
 import csv
 import os
+import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -106,17 +108,26 @@ def run_resume_mode(target: str, host: str, mode: str, trials: int, port: int,
     config_dir = os.path.join(PROJECT_DIR, 'pki')
 
     os.makedirs(out_dir, exist_ok=True)
-    ticket = os.path.join(out_dir, f'wan_{mode}.tick')
-    try:
-        os.remove(ticket)
-    except FileNotFoundError:
-        pass
+    # The ticket is key material, not a result: keep it out of out_dir (which is
+    # committed) and delete it when the run ends. Two of these once reached the
+    # public repo from here via `git add -A`.
+    ticket_dir = tempfile.mkdtemp(prefix='pqvpn-wanbench-')
+    ticket = os.path.join(ticket_dir, f'wan_{mode}.tick')
 
-    rc_p, _ = _do_handshake(host, port, crt, key, ca, mode, config_dir, sess_out=ticket)
-    if rc_p != 0 or not os.path.isfile(ticket):
-        print(f'  {mode}: could not prime a ticket (rc={rc_p})', file=sys.stderr)
-        _ssh(target, f'pkill -f "s_server.*:{port}"', check=False)
-        return None
+    try:
+        rc_p, _ = _do_handshake(host, port, crt, key, ca, mode, config_dir, sess_out=ticket)
+        if rc_p != 0 or not os.path.isfile(ticket):
+            print(f'  {mode}: could not prime a ticket (rc={rc_p})', file=sys.stderr)
+            _ssh(target, f'pkill -f "s_server.*:{port}"', check=False)
+            return None
+        return _resume_trials(target, host, mode, trials, port, out_dir,
+                              crt, key, ca, config_dir, ticket)
+    finally:
+        shutil.rmtree(ticket_dir, ignore_errors=True)
+
+
+def _resume_trials(target, host, mode, trials, port, out_dir,
+                   crt, key, ca, config_dir, ticket) -> dict | None:
 
     rows, times = [], {'full': [], 'resumed': []}
     for trial in range(1, trials + 1):

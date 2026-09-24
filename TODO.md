@@ -218,6 +218,11 @@
 - [x] Found by the first `--egress` run: the client's `default … metric 50` lost to the harness's metric-0 default → internet traffic bypassed the tunnel while pings to the server worked. Fixed: client now installs `0.0.0.0/1` + `128.0.0.0/1` via tun0 (beats any default regardless of metric)
 - [x] netns run (2026-09-22): `demo.sh --mode pqc --clients 2 --egress` → both clients see the host's public IP through the tunnel; `curl https://ifconfig.me/ip` from vpn_ns2 (DNS + HTTPS by hostname, inside the tunnel) prints it too; /1 half-routes above the metric-0 default in `ip route`
 
+## Repo hygiene [completed 2026-09-24]
+- [x] Raw benchmark CSVs are now tracked (14 files) so every table in BENCHMARKS.md is independently reproducible from the repo; added the one-liners that recompute them
+- [x] Removed two tracked TLS session tickets (`benchmark/results/wan_*.tick`, `SSL SESSION PARAMETERS` blobs) that reached the public repo via `git add -A` in 0763a86. Both benchmark scripts now write tickets to a temp dir and delete them; `*.tick` is git-ignored
+- [ ] Optional: the two ticket blobs remain in pushed history. Purging needs `git filter-repo` + force-push (rewrites every hash). Low value — they are dead tickets for throwaway benchmark servers, unrelated to the daemon keys in the ignored `pki/certs/` — so deferred rather than done before the demo
+
 ## Phase 7b: Capstone — run on a real VPS [in progress]
 - [x] AWS Lightsail 1 GB Ubuntu 24.04 (ap-south-1, static IP 203.0.113.5) + 2 GB swap; `bash scripts/deploy_vps.sh ubuntu@<ip>` deployed clean in ~35 min with BUILD_JOBS=1
 - [x] Lightsail firewall: TCP 22 + 14430–14433, Anywhere IPv4

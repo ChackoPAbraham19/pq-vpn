@@ -2,8 +2,20 @@
 
 Canonical, compiled benchmark report. Raw per-trial data lives in
 `benchmark/results/*.csv`; plots in `benchmark/results/plots/`. Generated with
-`benchmark/run_handshake_bench.py` (handshake, resumption) and the netns shell
+`benchmark/run_handshake_bench.py` (handshake, resumption),
+`benchmark/run_wan_handshake_bench.py` (real WAN, §7) and the netns shell
 benchmarks `benchmark/run_{latency,throughput,file_transfer}_bench.sh`.
+
+**Every table here is reproducible from the committed CSVs** — the raw per-trial
+data is tracked, not just these summaries. To check any figure:
+
+```bash
+# median of a handshake table (§1, §7)
+python3 -c "import csv,statistics as s;r=[float(x['ms']) for x in csv.DictReader(open('benchmark/results/handshake_classical.csv'))];print(round(s.median(r),2),len(r))"
+
+# full vs resumed (§2, §7) — group by the 'kind' column
+python3 -c "import csv,statistics as s;g={};[g.setdefault(x['kind'],[]).append(float(x['ms'])) for x in csv.DictReader(open('benchmark/results/handshake_resume_pqc.csv'))];print({k:round(s.median(v),2) for k,v in g.items()})"
+```
 
 ## Environment
 

@@ -3,8 +3,10 @@ import os
 import sys
 import csv
 import time
+import shutil
 import socket
 import subprocess
+import tempfile
 import argparse
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -258,18 +260,21 @@ def main():
     for mode in args.modes:
         if args.resume:
             print(f'Benchmarking full-vs-resumed handshake: {mode}')
-            # The ticket lives beside the CSVs; create the directory first or
-            # `s_client -sess_out` fails (rc=2) and every resumed trial falls
-            # back to a full handshake, silently ruining the comparison.
+            # The ticket is key material, not a result: keep it in a temp dir
+            # (out_dir is committed) and remove it when the run ends. The
+            # directory must exist before `s_client -sess_out` runs, or it
+            # fails with rc=2 and every resumed trial silently falls back to a
+            # full handshake, ruining the comparison.
             os.makedirs(args.out_dir, exist_ok=True)
-            ticket = os.path.join(args.out_dir, f'{mode}.tick')
+            ticket_dir = tempfile.mkdtemp(prefix='pqvpn-bench-')
             try:
-                os.remove(ticket)
-            except FileNotFoundError:
-                pass
-            run_resumption_benchmark(mode, os.path.join(PROJECT_DIR, 'pki'),
-                                     trials=args.trials, sess=ticket,
-                                     out_dir=args.out_dir)
+                run_resumption_benchmark(
+                    mode, os.path.join(PROJECT_DIR, 'pki'),
+                    trials=args.trials,
+                    sess=os.path.join(ticket_dir, f'{mode}.tick'),
+                    out_dir=args.out_dir)
+            finally:
+                shutil.rmtree(ticket_dir, ignore_errors=True)
         else:
             print(f'Benchmarking handshake: {mode}')
             config_dir = os.path.join(PROJECT_DIR, 'pki')
