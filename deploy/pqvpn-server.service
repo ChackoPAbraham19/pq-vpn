@@ -5,7 +5,7 @@
 # scripts/deploy_vps.sh does all of this.
 [Unit]
 Description=PQ-VPN server (post-quantum TLS tunnel)
-Documentation=https://github.com/ChackoPAbraham19/VPN
+Documentation=https://github.com/ChackoPAbraham19/Major-Project
 After=network-online.target
 Wants=network-online.target
 
