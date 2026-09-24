@@ -96,7 +96,9 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
 
 **Classical:** ECDSA P-256 certs, X25519, system OpenSSL 3.0.
 **PQC:** ML-DSA-65 certs, `-groups X25519MLKEM768`, custom OpenSSL 3.4.7 + oqs-provider
-(`/opt/openssl-pqc`). Full detail in [`docs/architecture.md`](docs/architecture.md).
+(`/opt/openssl-pqc`). Full detail in [`docs/architecture.md`](docs/architecture.md);
+a single self-contained write-up of the whole project — design, implementation,
+results and findings — is in [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md).
 
 ## Benchmarks (25 trials per mode, loopback + netns)
 
