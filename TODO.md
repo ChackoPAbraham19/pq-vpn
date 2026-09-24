@@ -230,10 +230,19 @@
       console; its browser terminal is SSH too). Fixed — SSH is allowed first
       and the script verifies SSH still answers, refusing to leave ufw enabled
       without a rule.
-- [ ] DNS through the tunnel on this laptop: blocked because `/etc/resolv.conf`
-      carries the immutable flag (`chattr +i`). Traffic routes through the
-      tunnel but lookups use the existing resolver. `sudo chattr -i
-      /etc/resolv.conf` before connecting, then re-verify
+- [x] Real-WAN browsing verified (2026-09-24): `curl ifconfig.me` = 203.0.113.5,
+      `https://www.google.com` HTTP 200 in 0.43 s, `https://1.1.1.1` HTTP 301 in
+      0.11 s, ping to the server's tunnel address 22–164 ms. Run with
+      `PQVPN_SKIP_DNS=1` (see below).
+- [ ] DNS through the tunnel (server-side dnsmasq) does not answer over the WAN.
+      Established so far: the immutable flag on `/etc/resolv.conf` was the first
+      blocker and is cleared; forwarded traffic works; ICMP to 10.8.0.1 is
+      answered; UDP/53 to 10.8.0.1 times out; adding `ufw allow in on tun0` on
+      the server did not change it. Next step: `tcpdump -ni tun0 port 53` on the
+      server **while the tunnel is up** to tell "query never arrives" from
+      "dnsmasq does not answer". Workaround for demos: run the client with
+      `PQVPN_SKIP_DNS=1` — all traffic still routes through the tunnel, lookups
+      use the host's existing resolver.
 - [ ] Two simultaneous clients over the WAN + dashboard via SSH port-forward
 - [x] Real-WAN handshake benchmark (`benchmark/run_wan_handshake_bench.py`,
       new): full 203 / 327 ms (1.61x, +124 ms at 99 ms RTT) and resumed
