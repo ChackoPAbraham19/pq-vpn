@@ -35,11 +35,23 @@ if [ "$MODE" = vps ]; then
     HOST="$(awk '/^server_host:/{print $2}' "$CFG")"
     USER_AT="${PQVPN_VPS_USER:-ubuntu}@${HOST}"
 
-    # Two independent ports: the dashboard binds RPORT on the VPS, the browser
-    # opens PORT here, and -L maps one to the other. They are checked on their
-    # own machines — a busy port here says nothing about the server, and an
-    # abruptly-killed SSH session can leave a dashboard holding a port there.
     printf '\n== Server dashboard on %s\n' "$HOST"
+
+    # A dashboard whose SSH session died without a hangup keeps running on the
+    # server and holds its port, so clear any leftover before choosing one.
+    # $$/$PPID are skipped because this very command line contains the pattern
+    # pgrep is matching, so it would otherwise kill its own shell.
+    ssh -o ConnectTimeout=10 "$USER_AT" '
+        n=0
+        for p in $(pgrep -f dashboard_server 2>/dev/null); do
+            [ "$p" = "$$" ] || [ "$p" = "$PPID" ] || { sudo kill "$p" 2>/dev/null && n=$((n+1)); }
+        done
+        [ "$n" -eq 0 ] || echo "   cleared $n leftover dashboard process(es) on the server"
+        sleep 1' || { echo "   cannot reach ${USER_AT}" >&2; exit 1; }
+
+    # Two independent ports: the dashboard binds RPORT on the VPS, the browser
+    # opens PORT here, and -L maps one to the other. Each is checked on its own
+    # machine — a port that is busy here says nothing about the server.
     RPORT="$(ssh -o ConnectTimeout=10 "$USER_AT" \
         'p=8080; while ss -ltn 2>/dev/null | grep -q ":$p "; do p=$((p+1)); done; echo $p')" \
         || { echo "   cannot reach ${USER_AT}" >&2; exit 1; }
