@@ -32,7 +32,10 @@ bash pki/gen_classical_ca.sh && bash pki/gen_pqc_ca.sh
 # 2. Live demo on one machine: netns harness → server + 3 clients → ping → iperf3 → teardown
 sudo bash scripts/demo.sh --mode pqc --clients 3           # add --keep to leave it running
 
-# 3. Or prove it builds from a bare Ubuntu 24.04 (Docker)
+# 3. Same tunnel over the real internet, against a deployed VPS (docs/DEPLOYMENT.md)
+sudo bash scripts/demo_vps.sh              # public IP before/after, DNS, a real website
+
+# 4. Or prove it builds from a bare Ubuntu 24.04 (Docker)
 bash scripts/clean_build_check.sh
 ```
 
@@ -40,9 +43,14 @@ Once a tunnel is up:
 
 ```bash
 .venv/bin/python3 cli/vpnctl.py status                     # server + every client, ports, bytes, negotiated crypto
-PQVPN_DASH_TOKEN=mytoken .venv/bin/python3 dashboard/dashboard_server.py   # http://127.0.0.1:8080
+bash scripts/dashboard.sh                                 # http://127.0.0.1:8080, token "demo"
+bash scripts/dashboard.sh --vps                           # same, but for a deployed server, over SSH
 .venv/bin/python3 cli/vpnctl.py disconnect
 ```
+
+`dashboard.sh` picks a free port if 8080 is taken; override with
+`PQVPN_DASH_PORT` / `PQVPN_DASH_TOKEN`, or run `dashboard/dashboard_server.py`
+directly for full control.
 
 ## What's implemented
 

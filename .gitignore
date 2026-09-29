@@ -43,3 +43,6 @@ graphify-out/
 # VPS deployment config (contains the real public IP / NIC)
 server/config-vps.yaml
 client/config-vps.yaml
+
+# Stray file from a mistyped shell command (was committed-by-accident bait)
+/cd

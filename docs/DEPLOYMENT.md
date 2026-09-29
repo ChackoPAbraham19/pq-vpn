@@ -183,6 +183,20 @@ curl ifconfig.me                                             # => VPS IP
 
 Unlike the netns harness, leave `PQVPN_SKIP_DNS` unset so the pushed DNS is applied.
 
+Or do all of the above in one command, which also verifies the result:
+
+```bash
+sudo bash scripts/demo_vps.sh        # --keep leaves the tunnel up afterwards
+bash scripts/dashboard.sh --vps      # the server's dashboard, over an SSH forward
+```
+
+`demo_vps.sh` prints the public IP before and after connecting, the negotiated
+crypto read back from OpenSSL (not from the config), a DNS lookup answered by the
+server's dnsmasq, and an HTTPS fetch through the tunnel. `dashboard.sh --vps`
+forwards the dashboard from the VPS to `127.0.0.1` and stops the remote process
+on Ctrl-C — the dashboard must run beside the daemon it monitors, since it reads
+that daemon's Unix socket.
+
 ### 6.4-lockout If you do lock yourself out of a Lightsail instance
 
 Lightsail has no serial console and its browser terminal is SSH, so a ufw
