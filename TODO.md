@@ -254,6 +254,44 @@
 - [ ] Two simultaneous clients over the WAN + dashboard via SSH port-forward
 - [x] Real-WAN handshake benchmark (`benchmark/run_wan_handshake_bench.py`,
       new): full 203 / 327 ms (1.61x, +124 ms at 99 ms RTT) and resumed
-      152.9 / 200.0 ms (PQC saves 72 ms, 1.36x). Finding: the WAN penalty is an
-      extra round trip caused by the certificate flight, not CPU — the opposite
-      of the "WAN dilutes it" expectation. Written up in BENCHMARKS.md §7.
+      152.9 / 200.0 ms (PQC saves 72 ms, 1.36x). Finding: the WAN penalty is
+      about one extra round trip, not CPU — the opposite of the "WAN dilutes
+      it" expectation. What *causes* the round trip is not established; see the
+      open questions at the end of this file. Written up in BENCHMARKS.md §7
+      and docs/PROJECT_REPORT.md §13.
+
+## Measurement fairness + open questions [open, raised 2026-09-29]
+
+Raised while fact-checking `docs/PROJECT_REPORT.md` and measuring the handshake
+byte-for-byte (`benchmark/measure_handshake_bytes.py`, results in
+`benchmark/results/handshake_bytes.csv`). None of these block the demo; all
+three affect how the numbers should be described in the paper.
+
+- [ ] **The classical-vs-PQC comparison is not like-for-like.** Classical mode
+      runs on system OpenSSL 3.0.13, PQC on the custom 3.4.7 stack at
+      `/opt/openssl-pqc`, so every published ratio confounds the algorithm
+      change with an OpenSSL version change. The byte measurement found one
+      concrete consequence: the PQC path negotiates certificate compression
+      (RFC 8879 — the client certificate arrives as `CompressedCertificate`,
+      10 898 B) while the classical path sends a plain `Certificate`, because
+      3.0.13 does not implement compression. Fix: run classical mode against
+      `/opt/openssl-pqc` as well — it does ECDSA P-256 and X25519 perfectly
+      well — and re-measure on one implementation. Check whether the 1.77x
+      loopback ratio and the 1.61x WAN ratio move.
+- [ ] **What causes the extra WAN round trip is still unconfirmed.** Measured:
+      PQC takes ~3.3 round trips against ~2.0 classical, and its handshake
+      flight is 16 001 B server-side / 15 852 B client-side against a 14 600 B
+      initial congestion window (the VPS sets no `initcwnd`, so the kernel
+      default of 10 segments applies). HelloRetryRequest was checked for and
+      does not occur. Not established: that the window overflow is what the
+      extra round trip *is*. Candidates are the flight exceeding `initcwnd`,
+      the oversized resumed ClientHello (7456 B) plus 5833 B tickets, and
+      ordinary WAN variance. Settle it with a `tcpdump` capture of one WAN
+      handshake, looking for a ~99 ms gap inside the server's flight.
+- [ ] **Re-measure on the pinned library versions.**
+      `scripts/install_custom_openssl.sh` pins liboqs 0.15.0 and oqs-provider
+      0.11.0 for reproducible clean builds, but this machine still carries the
+      0.16.0 / 0.12.0-dev stack the benchmarks were taken on. Already flagged in
+      the version note in `docs/BENCHMARKS.md`; recorded here so it is an action
+      and not just a caveat. The ratio is not expected to move — both modes
+      traverse identical code paths — but that is an assumption until measured.
