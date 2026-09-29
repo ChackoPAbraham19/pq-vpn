@@ -6,12 +6,16 @@ cost of post-quantum TLS: no network latency, so the larger ML-DSA-65
 certificates and X25519MLKEM768 key share show up as CPU time (~+12 ms, 1.8x).
 
 The intuition that a WAN would dilute this is **wrong**, and measuring it is
-the point of this script: over a real path the extra certificate and key-share
-bytes do not merely cost CPU, they overflow the initial congestion window and
-buy an additional round trip. Measured against a Mumbai VPS at ~99 ms RTT, PQC
-cost +124 ms rather than +12 ms. Session resumption skips the certificate
-exchange and recovers most of it, which is why resumption matters far more on
-a WAN (PQC 1.36x) than loopback suggested (1.08x).
+the point of this script: against a Mumbai VPS at ~99 ms RTT, PQC cost +124 ms
+rather than +12 ms — about one extra round trip, not extra compute.
+
+What causes that round trip is not settled here. `measure_handshake_bytes.py`
+shows the PQC handshake flight is 16 001 B against a 14 600 B initial
+congestion window, which is consistent with it, but no packet capture confirms
+it. Session resumption recovers part of the cost (PQC 1.36x on a WAN against
+1.08x on loopback) yet leaves PQC ~47 ms slower than classical even resumed,
+because a resumed PQC ClientHello still carries a 5.8 KB ticket. See
+docs/PROJECT_REPORT.md §13.
 
 It starts a plain `openssl s_server` on the VPS over SSH, times `s_client`
 handshakes from this machine against it, and tears the server down. The VPN

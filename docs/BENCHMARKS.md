@@ -63,7 +63,7 @@ repetitions of 25 trials per mode (n = 125)**; the table pools all trials.
 | PQC (ML-DSA-65 + X25519MLKEM768) | 27.98 | 19.29 | 45.32 | 25.81 – 30.10 |
 
 **PQC ≈ 1.77x slower median** (per-repetition ratios 1.66–1.86x). Cause:
-ML-DSA-65 certs ≈7.5 KB vs ≈4.5 KB ECDSA, plus the larger X25519MLKEM768 key
+ML-DSA-65 certs 5577 B DER vs 386 B for ECDSA P-256, plus the larger X25519MLKEM768 key
 share. One-time cost per connection.
 
 ![handshake](../benchmark/results/plots/handshake.png)
@@ -186,12 +186,17 @@ this run):
 trips (TCP connect + TLS 1.3), as expected. PQC lands near 3.3 round trips.
 
 **This is the opposite of what loopback suggests.** On loopback PQC costs
-+12 ms — pure CPU for the bigger certificate and key share. Over a WAN the same
-extra bytes overflow the initial congestion window (ML-DSA-65 chains are
-≈7.5 KB against a ~14 KB initial window, before the key share), so the
-handshake buys an **extra round trip**. At 99 ms per round trip that is the
-+124 ms. The post-quantum handshake penalty is therefore a *bandwidth-delay*
-effect on real networks, not a compute effect.
++12 ms — pure CPU for the bigger certificate and key share. Over a WAN the cost
+is ~124 ms, about one extra round trip. `benchmark/measure_handshake_bytes.py`
+measures where the bytes go: the PQC server's handshake flight is **16 001 B**
+against a **14 600 B** initial congestion window (and the client's, under mutual
+TLS, is 15 852 B), so it cannot be sent in one burst. A HelloRetryRequest — the
+other way to buy exactly one round trip — was checked for and does not occur.
+
+The measured round-trip counts are consistent with the larger handshake flight
+costing an extra round trip; **this is inferred, not confirmed by packet
+capture.** See `docs/PROJECT_REPORT.md` §13 for the full message-size table and
+the other candidate explanations.
 
 **Full vs resumed, 20 trials/mode** (interleaved against one long-lived server;
 round-trip measured at 51.6 ms during this later run — the path was quieter, so

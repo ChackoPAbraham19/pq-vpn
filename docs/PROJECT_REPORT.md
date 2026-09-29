@@ -108,7 +108,7 @@ no longer exported.
 | `server/session_manager.py` | 358 | IP pool, slot-to-port binding, `ClientSession` lifecycle, welcome rate limiter |
 | `cli/vpnctl.py` | 350 | Control CLI over Unix-socket IPC |
 | `client/net_config.py` | 280 | Client routing and DNS: half-routes, transport-protection route, IPv6 guard, `resolvectl`/`resolv.conf` |
-| `common/daemon_utils.py` | 227 | `StatusTracker`, `IpcServer`, socket and PID paths shared by both daemons |
+| `common/daemon_utils.py` | 248 | `StatusTracker`, `IpcServer`, socket and PID paths shared by both daemons |
 | `dashboard/dashboard_server.py` | 211 | FastAPI status API, WebSocket stream, token-guarded actions |
 | `server/net_config.py` | 188 | Server networking: NAT, forwarding, MSS clamp, dnsmasq |
 | `common/openssl_wrapper.py` | 136 | Builds and spawns the `s_server` / `s_client` command lines per mode |
@@ -190,8 +190,9 @@ Every byte on the wire is wrapped in a typed frame:
 **Why explicit framing is required.** TCP is a byte stream with no message
 boundaries, and a single read can return part of a packet or several at once.
 This matters more here than in a classical VPN: post-quantum handshake
-artefacts are far larger (an ML-DSA-65 chain is roughly 7.5 KB against about
-4.5 KB for ECDSA), so relying on read boundaries would corrupt traffic. The
+artefacts are far larger — the server's certificate message is 11 168 bytes in
+PQC mode against 882 classical (§13.1) — so relying on read boundaries would
+corrupt traffic. The
 receiver accumulates bytes and only processes a frame once `length` bytes have
 arrived (`common/framing.py`).
 
@@ -290,7 +291,7 @@ downloads hang.
 | Tampering with pushed configuration | The plaintext welcome channel carries only a port number; tunnel IP, gateway and DNS arrive as the first frame *inside* mTLS and are validated before use |
 | Compromised or lost client key | Per-client certificates plus a CRL checked by every new session; `revoke_client.sh --kick` also terminates the live session |
 | Denial of service on the welcome port | Slot claims that never complete mTLS are reaped after 10 s; a per-source token bucket (1/s, burst 3) is applied before any slot or process is allocated |
-| Unauthorised dashboard actions | `POST /disconnect` and `/rekey` require the `X-PQVPN-Token` header; the custom header forces a CORS preflight, which also blocks cross-site requests |
+| Unauthorised dashboard actions | `POST /disconnect` and `/rekey` require the `X-PQVPN-Token` header; the custom header forces a CORS preflight, which also blocks cross-site requests. (`/rekey` is guarded but deliberately declines — `s_server` cannot renegotiate, so it answers `ok: false` and says to reconnect; see §15.) |
 | DNS leaking to the local network | Server-side `dnsmasq` on the tunnel address is pushed to the client and applied to the system resolver |
 | IPv4 traffic escaping the tunnel | `/1` half-routes beat any default route regardless of metric |
 | IPv6 traffic escaping the tunnel | v6 default route blackholed while connected |
@@ -382,6 +383,14 @@ Lightsail instance in `ap-south-1` (Mumbai). Classical mode uses the system
 OpenSSL 3.0.13; PQC mode used OpenSSL 3.4.7-dev with liboqs 0.16.0 and
 oqs-provider 0.12.0-dev.
 
+These differ from the versions in §3 for a reason.
+`scripts/install_custom_openssl.sh` pins OpenSSL 3.4.7, liboqs 0.15.0 and
+oqs-provider 0.11.0 so that clean builds and CI are reproducible, but those pins
+were added *after* the stack on the measurement machine was built. The numbers
+below therefore come from the slightly newer versions named here. Re-measuring
+on the pinned set is outstanding; the classical-to-PQC comparison is not
+expected to move, since both modes traverse identical code paths.
+
 **A note on variance.** The measurement host is an interactive desktop, not a
 quiet benchmark machine. Across five identical repetitions the classical median
 ranged 13.9–18.1 ms and the PQC median 25.8–30.1 ms. **The ratio between modes
@@ -396,9 +405,10 @@ be quoted to two decimal places as if repeatable.
 | Classical (P-256 + X25519) | 15.80 | 10.64 | 25.19 | 13.92 – 18.06 |
 | PQC (ML-DSA-65 + X25519MLKEM768) | 27.98 | 19.29 | 45.32 | 25.81 – 30.10 |
 
-PQC is **1.77x** slower (per-repetition ratios 1.66–1.86x). Cause: ML-DSA-65
-certificates are roughly 7.5 KB against 4.5 KB for ECDSA, plus the larger
-X25519MLKEM768 key share.
+PQC is **1.77x** slower (per-repetition ratios 1.66–1.86x). Cause: size. An
+ML-DSA-65 certificate is 5577 bytes DER against 386 for ECDSA P-256, its
+signature is 3309 bytes against about 72, and the X25519MLKEM768 key share is
+1222 bytes against 32. Measured message by message in §13.1.
 
 ### 12.2 Session resumption, loopback (3 repetitions x 20 trials, n = 60 per kind)
 
@@ -486,27 +496,99 @@ the opposite.**
 - PQC: **327 ms**, roughly 3.3 round trips — **+124 ms**, an order of magnitude
   more than the +12 ms seen on loopback.
 
-The explanation is bandwidth-delay, not compute. TCP begins with an initial
-congestion window of about 10 packets (~14 KB). An ML-DSA-65 certificate chain
-is roughly 7.5 KB, and with the hybrid key share the server's handshake flight
-exceeds that window, so it cannot be sent in one burst — the handshake buys an
-**extra round trip**, and on this path a round trip costs 99 ms.
+The extra time is not compute: the whole computational difference measured on
+loopback is 12 ms. To find out what the handshake is actually doing, every
+message was captured with `openssl s_client -msg` in both modes — full and
+resumed — by `benchmark/measure_handshake_bytes.py`
+(`benchmark/results/handshake_bytes.csv`). Message sizes are properties of the
+protocol rather than the path, so loopback is the right place to measure them.
 
-The corollary confirms the mechanism. Session resumption skips the certificate
-exchange entirely, so if the penalty really is certificate-size-driven,
-resumption should recover more for PQC than for classical. It does: **72 ms
-saved for PQC against 46 ms for classical**. On loopback the same mechanism
-looked negligible (PQC 1.08x); over the internet it is 1.36x and the single most
-effective optimisation available to this design.
+### 13.1 What the handshake actually carries
 
-Two practical conclusions follow:
+| Message | Classical | PQC |
+|---|---|---|
+| ClientHello | 288 | **1585** (the X25519MLKEM768 key share alone is 1222) |
+| ServerHello | 122 | 1210 |
+| Certificate (server → client) | 882 | **11168** (server certificate + CA, 5577 B each) |
+| CertificateVerify (server) | 79 | **3317** (an ML-DSA-65 signature is 3309 B) |
+| Client certificate | `Certificate` 980 | **`CompressedCertificate` 10898** |
+| CertificateVerify (client) | 78 | **3317** |
+| NewSessionTicket (x2) | 713 each | **5833 each** |
+| **Resumed** ClientHello | **1039** | **7456** |
+
+The client certificate is worth a second look: on the PQC path it arrives as a
+`CompressedCertificate` (RFC 8879) rather than a `Certificate`, because the
+custom OpenSSL 3.4 negotiates certificate compression where the system 3.0.13
+used for classical mode does not. Compression is already in use and still
+leaves 10.9 KB, so it is not an optimisation left on the table.
+
+Totalled per direction, excluding the tickets that follow the handshake:
+
+| | Classical | PQC |
+|---|---|---|
+| Full: client → server | 1399 B | **15 852 B** |
+| Full: server → client | 1261 B | **16 001 B** |
+| Resumed: client → server | 1091 B | **7 508 B** |
+| Resumed: server → client | 186 B | 1 274 B |
+
+### 13.2 Three things this settles
+
+**There is no HelloRetryRequest.** The obvious cheap explanation for exactly one
+extra round trip would be the server rejecting the client's key share and asking
+for another. It does not happen: the ClientHello already carries an
+X25519MLKEM768 key share, because `common/openssl_wrapper.py` passes
+`-groups X25519MLKEM768` as the only group on both ends. Checked in the full and
+the resumed handshake, both modes.
+
+**The PQC handshake flight does exceed the initial congestion window.** Linux
+starts a connection with 10 segments, about 14 600 bytes; the deployment VPS
+uses that default (its route sets no `initcwnd`). The PQC server's flight is
+**16 001 bytes** and the client's, under mutual TLS, is **15 852** — both above
+the window, where classical sends well under a tenth of it. The flight therefore
+cannot go out in a single burst. This part is measurement, not inference.
+
+**Resumption does not remove the bulk**, which is why it recovered so much less
+than expected. A resumed PQC ClientHello is **7456 bytes against 1039
+classical**, because the PSK identity *is* the 5833-byte ticket, and the server
+answers with another one. Resumption skips the certificates but still moves
+roughly 8.8 KB where classical moves 1.3 KB.
+
+### 13.3 What is established and what is not
+
+What is measured: PQC costs about one extra round trip on a real path
+(3.3 versus 2.0), and its handshake flight exceeds the initial congestion
+window in both directions.
+
+What is **not** established is that the second fact causes the first. The
+measured round-trip counts are consistent with the larger handshake flight
+costing an extra round trip; this is inferred, not confirmed by packet capture.
+Other candidates remain open, and more than one may contribute:
+
+- the flight exceeding `initcwnd`, needing a second burst;
+- the oversized resumed ClientHello (7.4 KB) and the 5.8 KB tickets, which keep
+  even a resumed PQC handshake far larger than a classical full one;
+- ordinary WAN variance — the two runs were at different round-trip times
+  (99.2 ms and 51.6 ms) and the PQC maximum reached 668 ms.
+
+The resumption result points the same way — at 51.6 ms RTT resumption saved
+72 ms for PQC against 46 ms for classical — but it is a strong hint rather than
+proof. If certificate size alone bought a whole round trip, a resumed handshake
+should have closed the gap to roughly the CPU difference (~10 ms). It did not:
+PQC stays 47 ms (~0.9 RTT) slower than classical even resumed, and only about
+26 ms of the full-handshake gap disappeared. The byte counts above say why —
+resumption removes the certificates but not the ticket.
+
+Settling this needs a packet capture of a WAN handshake showing where the
+one-round-trip gap falls inside the flight. That is future work (§16).
+
+Two practical conclusions hold regardless of which candidate dominates:
 
 1. **Loopback benchmarks understate post-quantum handshake cost**, because they
-   measure CPU while deployments pay round trips. Published figures that come
-   only from localhost should be read with that in mind.
-2. **Session resumption matters far more in deployment than lab numbers
-   suggest**, and certificate-chain size — not algorithm speed — is the lever
-   worth optimising.
+   measure CPU while deployments pay for bytes and round trips. Published
+   figures that come only from localhost should be read with that in mind.
+2. **Message size, not algorithm speed, is the lever.** Every PQC number above
+   is a size: 11 KB of certificates, a 3.3 KB signature, a 5.8 KB ticket. That
+   is also why resumption helps less here than the loopback figures suggested.
 
 ---
 
@@ -571,8 +653,14 @@ Stated plainly, because knowing where a system stops is part of describing it.
 - **Custom TLS server.** Linking against the same OpenSSL to install a ticket-key
   callback would give resumption that survives restarts *and* enable TLS 1.3
   KeyUpdate for mid-stream rekeying — one change solving two limitations.
-- **Certificate-chain size.** Given §13, measuring ML-DSA-44 or a compressed
-  chain would test directly whether the extra round trip can be removed.
+- **Packet capture of a WAN handshake**, to settle §13: whether the
+  one-round-trip gap really falls where the flight exceeds the congestion
+  window, or somewhere else.
+- **Smaller credentials.** §13 shows the cost is message size, and certificate
+  compression is already in use (the client certificate is sent as
+  `CompressedCertificate` and still runs to 10.9 KB). The remaining levers are a
+  smaller parameter set (ML-DSA-44), not sending the CA with the leaf, and
+  shrinking the 5.8 KB session ticket that keeps even resumed handshakes large.
 - **Online revocation** via OCSP stapling instead of a shipped CRL.
 - **WAN latency and throughput** through the tunnel, to complete the real-network
   picture alongside the handshake numbers.
@@ -613,6 +701,16 @@ Raw per-trial data is committed under `benchmark/results/`, so every table in
 python3 -c "import csv,statistics as s;r=[float(x['ms']) for x in csv.DictReader(open('benchmark/results/handshake_classical.csv'))];print(round(s.median(r),2),len(r))"
 ```
 
+The message sizes in §13 are reproducible the same way — the script reprints the
+tables and rewrites `benchmark/results/handshake_bytes.csv`:
+
+```bash
+.venv/bin/python3 benchmark/measure_handshake_bytes.py
+```
+
+It needs both PKIs (`pki/gen_classical_ca.sh`, `pki/gen_pqc_ca.sh`) and the PQC
+OpenSSL stack, but no root and no network.
+
 ---
 
 ## 18. Repository map
@@ -626,7 +724,7 @@ python3 -c "import csv,statistics as s;r=[float(x['ms']) for x in csv.DictReader
 | `dashboard/` | FastAPI + WebSocket dashboard, its page, its test suite |
 | `pki/` | CA generation, per-client issue and revoke, OpenSSL configs |
 | `scripts/` | Stack build, namespace harness, demo, VPS deploy, clean-build check, diagnostics, rollback |
-| `benchmark/` | Loopback and WAN benchmarks, plotting, raw CSVs, plots |
+| `benchmark/` | Loopback and WAN benchmarks, the handshake byte-size measurement behind §13, plotting, raw CSVs, plots |
 | `deploy/` | systemd unit |
 | `docs/` | This report, architecture, benchmarks, setup, deployment, roadmap |
 | `Dockerfile` | Clean-build proof from `ubuntu:24.04` |
