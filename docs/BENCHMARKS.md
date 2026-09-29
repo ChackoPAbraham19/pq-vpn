@@ -210,11 +210,11 @@ single most effective optimisation available to this design.
 
 ## Validation
 
-`bash scripts/demo.sh --dry-run` runs five suites — **142 checks**:
+`bash scripts/demo.sh --dry-run` runs five suites — **143 checks**:
 
 | Suite | Checks | Covers |
 |-------|--------|--------|
-| `common/test_common.py` | 71 | framing, welcome→TLS config push, slot/port recycling, CRL revocation against a real `s_server`, rate limiter, IPC |
+| `common/test_common.py` | 72 | framing, welcome→TLS config push, slot/port recycling, CRL revocation against a real `s_server`, rate limiter, IPC |
 | `common/test_net_config.py` | 25 | NAT, MSS clamp, route protection/restore, IPv6 guard, DNS fallback |
 | `common/test_keepalive.py` | 7 | keepalive, idle detection, backoff, session-stop cascade |
 | `common/test_resumption.py` | 14 | ticket cache, wrapper flags, real OpenSSL prime→`Reused` |

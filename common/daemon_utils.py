@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import glob
 import time
@@ -173,6 +174,13 @@ class IpcServer:
         while not self._stop.is_set():
             try:
                 conn, _ = server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                # The *listening* socket is gone (closed by stop(), or its path
+                # removed). Nothing left to accept on, so end the thread.
+                break
+            try:
                 command = ''
                 result = None
                 # Wait up to 100ms for an optional command, then reply. This keeps
@@ -192,11 +200,24 @@ class IpcServer:
                 else:
                     reply = self.status.snapshot()
                 conn.sendall((json.dumps(reply) + '\n').encode())
-                conn.close()
-            except socket.timeout:
-                continue
-            except OSError:
-                break
+            except Exception as exc:  # one bad caller must not end the listener
+                # A caller that hangs up mid-reply (vpnctl interrupted, a
+                # dashboard killed between poll and read) makes sendall raise
+                # EPIPE/ECONNRESET. Ending the loop there left daemons that
+                # tunnelled fine for days while every status query reported
+                # "VPN is not running" — observed on the VPS after 4 days up.
+                print(f'[ipc] {self.role} request failed: {exc!r}',
+                      file=sys.stderr, flush=True)
+            finally:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+
+        try:
+            server.close()
+        except OSError:
+            pass
 
         server.close()
         try:

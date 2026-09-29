@@ -349,12 +349,12 @@ image. `.github/workflows/clean-build.yml` runs the same thing on every push.
 
 Three independent layers.
 
-**Unit suites — 142 checks across five files.** Most drive *real* `openssl`
+**Unit suites — 143 checks across five files.** Most drive *real* `openssl`
 processes rather than mocks, so they test the actual integration:
 
 | Suite | Checks | Covers |
 |---|---|---|
-| `common/test_common.py` | 71 | Framing round-trips, welcome-to-relay end to end over real TLS, slot and port recycling, stale-handshake reaping, rate limiter, CRL revocation against a live `s_server`, config validation, IPC |
+| `common/test_common.py` | 72 | Framing round-trips, welcome-to-relay end to end over real TLS, slot and port recycling, stale-handshake reaping, rate limiter, CRL revocation against a live `s_server`, config validation, IPC |
 | `common/test_net_config.py` | 25 | NAT rule construction, MSS clamp, route protection and restoration, IPv6 guard, DNS fallback, safe TUN teardown |
 | `common/test_keepalive.py` | 7 | Backoff growth, idle detection, keepalive behaviour, session-stop cascade |
 | `common/test_resumption.py` | 14 | Ticket cache paths, atomic rotation, wrapper flags, real OpenSSL prime-then-`Reused` |
@@ -596,7 +596,7 @@ sudo bash scripts/demo.sh --mode pqc --clients 2 --egress
 bash scripts/demo.sh --dry-run --mode pqc
 ```
 
-Runs all 142 checks plus a real handshake benchmark in both modes.
+Runs all 143 checks plus a real handshake benchmark in both modes.
 
 ### In Docker, from a bare image
 

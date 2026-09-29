@@ -556,6 +556,62 @@ def test_ipc_server_socket_permissions():
             du.socket_path = orig
 
 
+def test_ipc_server_survives_caller_hangup():
+    """A caller that hangs up mid-reply must not kill the IPC listener.
+
+    Regression: the accept loop used to `break` on any OSError, so one
+    BrokenPipeError from sendall ended status serving for the life of the
+    process. Seen on the VPS: the tunnel relayed fine for four days while
+    every status query answered "VPN is not running".
+    """
+    import socket
+    import struct
+    import tempfile
+    import common.daemon_utils as du
+    from common.daemon_utils import IpcServer, StatusTracker, ipc_request
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        orig = du.socket_path
+        du.socket_path = lambda role, instance=None: os.path.join(
+            tmpdir, f'pqvpn-{role}' + (f'-{instance}' if instance else '') + '.sock')
+        ipc = None
+        try:
+            st = StatusTracker({'mode': 'pqc'}, tun_name='tun0', tun_addr='10.8.0.1/24')
+            ipc = IpcServer(st, role='hangup')
+            ipc.start()
+            time.sleep(0.3)
+
+            # Connect and vanish before the reply is written, several times —
+            # RST rather than a clean FIN is what breaks sendall. A refused
+            # connect means the listener is already dead, so count them and
+            # report a failure rather than raising out of the suite.
+            hangups = 0
+            for _ in range(5):
+                try:
+                    s_ = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s_.connect(du.socket_path('hangup'))
+                    s_.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                  struct.pack('ii', 1, 0))
+                    s_.close()
+                    hangups += 1
+                except OSError:
+                    break
+                time.sleep(0.05)
+
+            time.sleep(0.3)
+            try:
+                reply = ipc_request('hangup')
+            except OSError:
+                reply = None      # connection refused: the listener is gone
+            alive = (hangups == 5 and isinstance(reply, dict)
+                     and reply.get('mode') == 'pqc')
+            test('IPC listener survives callers hanging up mid-reply', alive)
+        finally:
+            if ipc:
+                ipc.stop()
+            du.socket_path = orig
+
+
 def test_vpnctl_eacces_handling():
     """vpnctl reports 'root-owned socket' on EACCES instead of 'not running'."""
     import socket
@@ -1052,6 +1108,7 @@ if __name__ == '__main__':
     test_drain_stderr_resumed_evidence()
     test_status_negotiated_lifecycle()
     test_ipc_server_socket_permissions()
+    test_ipc_server_survives_caller_hangup()
     test_vpnctl_eacces_handling()
     test_pool_pressure_reclaim()
     test_ipc_shutdown_command()
