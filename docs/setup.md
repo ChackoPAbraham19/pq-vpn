@@ -239,7 +239,8 @@ sudo ip netns exec vpn_ns2 bash benchmark/run_file_transfer_bench.sh pqc
 
 # Generate plots
 .venv/bin/python3 benchmark/plot_results.py
-# → benchmark/results/plots/{handshake,handshake_resume,latency,throughput,file_transfer}.png
+# → benchmark/results/plots/{handshake,handshake_resume,latency,throughput,
+#                            file_transfer,wan_handshake,handshake_bytes}.png
 ```
 
 Results are interpreted in [`docs/BENCHMARKS.md`](BENCHMARKS.md).

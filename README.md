@@ -14,9 +14,10 @@ in 2024; this project puts them in a complete VPN and measures what they cost.
 
 **Result:** post-quantum security costs about 1.8x on the one-time handshake
 (≈12 ms on loopback) and **nothing** on steady-state latency or throughput.
-Measured against a real VPS, the cost turns out to be **one extra round trip**
-— +124 ms at 99 ms RTT — because the larger certificate flight overflows the
-initial congestion window; session resumption recovers most of it.
+Measured against a real VPS, the cost turns out to be about **one extra round
+trip** — +124 ms at 99 ms RTT. The PQC handshake flight is 16 KB against a
+14.6 KB initial congestion window, which is consistent with that; session
+resumption recovers part of it.
 
 ## Quick start
 

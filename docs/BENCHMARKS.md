@@ -182,6 +182,8 @@ this run):
 | Classical | 203.0 | 90.8 | 304.4 |
 | PQC | 327.0 | 202.4 | 668.2 |
 
+![wan handshake](../benchmark/results/plots/wan_handshake.png)
+
 **PQC = 1.61x, i.e. +124 ms.** Classical's 203 ms is almost exactly two round
 trips (TCP connect + TLS 1.3), as expected. PQC lands near 3.3 round trips.
 
@@ -192,6 +194,8 @@ measures where the bytes go: the PQC server's handshake flight is **16 001 B**
 against a **14 600 B** initial congestion window (and the client's, under mutual
 TLS, is 15 852 B), so it cannot be sent in one burst. A HelloRetryRequest — the
 other way to buy exactly one round trip — was checked for and does not occur.
+
+![handshake bytes](../benchmark/results/plots/handshake_bytes.png)
 
 The measured round-trip counts are consistent with the larger handshake flight
 costing an extra round trip; **this is inferred, not confirmed by packet
@@ -207,11 +211,18 @@ compare within this table only):
 | Classical | 198.6 | 152.9 | 45.7 ms | 1.30x |
 | PQC | 272.0 | 200.0 | 72.0 ms | 1.36x |
 
-Resumption skips the certificate exchange and recovers most of the penalty —
-and it saves **more** for PQC in absolute terms (72 ms vs 46 ms), which is the
-predicted signature of a certificate-size-driven round trip. On loopback the
-same mechanism looked negligible (§2: PQC 1.08x); over the internet it is the
-single most effective optimisation available to this design.
+Resumption saves **more** for PQC in absolute terms (72 ms vs 46 ms), and on
+loopback the same effect looked negligible (§2: PQC 1.08x), so it matters far
+more over the internet than lab figures suggested.
+
+It does **not** remove most of the penalty, though. The PQC handshake is still
+47 ms (~0.9 round trips) slower than classical even when resumed, and only
+about 26 ms of the 73 ms full-handshake gap disappears.
+`measure_handshake_bytes.py` shows why: a resumed PQC ClientHello is **7456
+bytes against 1039 classical**, because the PSK identity *is* a 5833-byte
+ticket and the server returns another one. Resumption drops the certificates
+but not the bulk. It is the most effective optimisation available here, not a
+fix.
 
 ## Validation
 
@@ -229,8 +240,8 @@ single most effective optimisation available to this design.
 
 | Metric | Classical → PQC | Verdict |
 |--------|-----------------|---------|
-| WAN full handshake | 1.61x (+124 ms) | An extra round trip, not CPU — the real deployment cost |
-| WAN resumed handshake | saves 72 ms (1.36x) | Resumption matters far more on a WAN than loopback showed |
+| WAN full handshake | 1.61x (+124 ms) | About one extra round trip, not CPU — the real deployment cost |
+| WAN resumed handshake | saves 72 ms (1.36x) | Helps far more than loopback showed, but PQC stays ~47 ms behind |
 | Full handshake | 1.77x slower | Only PQC cost; once per connection/reconnect |
 | Resumed handshake | 1.08x vs 1.12x | Resume minimizes even this; saves WAN RTT |
 | Ping latency | +0.04 ms | Negligible |
@@ -241,9 +252,11 @@ Key takeaways:
 
 1. **PQC is practical for VPNs.** The cost is confined to the one-time
    handshake — 1.77x on loopback (CPU) and 1.61x over a real WAN, where it
-   takes the form of one extra round trip caused by the larger certificate
-   flight. TLS session resumption recovers most of the WAN penalty (72 ms,
-   1.36x) and the daemons resume automatically.
+   takes the form of about one extra round trip. What causes that round trip is
+   not established (§7): the PQC flight does exceed the initial congestion
+   window, which is consistent with it, but no packet capture confirms the
+   link. TLS session resumption recovers part of the penalty (72 ms, 1.36x) and
+   the daemons resume automatically.
 2. **Steady-state data plane is identical** — both modes use AES-256-GCM; PQC
    only affects the initial key exchange.
 3. **Throughput is bounded by the Python relay** (`select` + `read`/`write`),

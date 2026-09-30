@@ -195,6 +195,128 @@ def _plot_file_transfer(data: dict):
     print(f'  file_transfer.png')
 
 
+def _read_wan(path: str) -> list:
+    """Per-trial ms from a WAN handshake CSV (trial_id, mode, ms)."""
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [float(r['ms']) for r in csv.DictReader(f) if r['ms'] != 'err']
+
+
+def _read_wan_resume(path: str) -> dict:
+    data = defaultdict(list)
+    if not os.path.exists(path):
+        return data
+    with open(path) as f:
+        for row in csv.DictReader(f):
+            if row['ms'] == 'err':
+                continue
+            data[row['kind']].append(float(row['ms']))
+    return data
+
+
+def _read_bytes(path: str) -> dict:
+    """Handshake bytes per mode/phase/direction, tickets excluded.
+
+    NewSessionTicket is sent after the handshake completes, so it does not
+    compete for the initial congestion window the flight has to fit into.
+    """
+    data = defaultdict(int)
+    if not os.path.exists(path):
+        return data
+    with open(path) as f:
+        for row in csv.DictReader(f):
+            if row['message'] == 'NewSessionTicket':
+                continue
+            data[(row['mode'], row['phase'], row['direction'])] += int(row['bytes'])
+    return data
+
+
+def _plot_wan(full_c: list, full_p: list, res_c: dict, res_p: dict):
+    """The headline result, as two panels — the runs had different RTTs
+    (99.2 ms and 51.6 ms), so their bars must not be read against each other."""
+    if not full_c or not full_p:
+        return
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 5))
+    colors = ['#4c72b0', '#dd8452']
+
+    vals = [np.median(full_c), np.median(full_p)]
+    bars = ax1.bar(['classical', 'pqc'], vals, color=colors, width=0.5, edgecolor='black')
+    for bar, v in zip(bars, vals):
+        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 6,
+                 f'{v:.0f}ms', ha='center', va='bottom')
+    ax1.axhline(99.2, color='grey', linestyle=':', linewidth=1)
+    ax1.text(1.45, 103, '1 RTT', color='grey', ha='right', fontsize=8)
+    ax1.axhline(198.4, color='grey', linestyle=':', linewidth=1)
+    ax1.text(1.45, 202, '2 RTT', color='grey', ha='right', fontsize=8)
+    ax1.axhline(297.6, color='grey', linestyle=':', linewidth=1)
+    ax1.text(1.45, 301, '3 RTT', color='grey', ha='right', fontsize=8)
+    ax1.set_ylabel('Median handshake (ms)')
+    ax1.set_title('Full handshake, 25 trials (RTT 99.2 ms)')
+
+    if res_c.get('full') and res_p.get('full'):
+        labels = ['classical\nfull', 'classical\nresumed', 'pqc\nfull', 'pqc\nresumed']
+        vals2 = [np.median(res_c['full']), np.median(res_c['resumed']),
+                 np.median(res_p['full']), np.median(res_p['resumed'])]
+        bars2 = ax2.bar(labels, vals2, width=0.6, edgecolor='black',
+                        color=[colors[0], colors[0], colors[1], colors[1]],
+                        alpha=1.0)
+        for bar, v in zip(bars2, vals2):
+            ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 4,
+                     f'{v:.0f}ms', ha='center', va='bottom')
+        ax2.set_ylabel('Median handshake (ms)')
+        ax2.set_title('Full vs resumed, 20 trials (RTT 51.6 ms)')
+
+    for ax in (ax1, ax2):
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+    fig.suptitle('WAN handshake: laptop to Mumbai VPS', fontweight='bold')
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUT_DIR, 'wan_handshake.png'), dpi=150)
+    print('  wan_handshake.png')
+
+
+def _plot_handshake_bytes(data: dict):
+    """Bytes on the wire per flight, against the initial congestion window."""
+    if not data:
+        return
+    initcwnd = 10 * 1460
+    rows = [('full', '>>>', 'Full: client to server'),
+            ('full', '<<<', 'Full: server to client'),
+            ('resumed', '>>>', 'Resumed: client to server'),
+            ('resumed', '<<<', 'Resumed: server to client')]
+    rows = [r for r in rows if data.get(('pqc', r[0], r[1]))]
+    if not rows:
+        return
+    labels = [r[2] for r in rows]
+    cls = [data.get(('classical', r[0], r[1]), 0) for r in rows]
+    pqc = [data.get(('pqc', r[0], r[1]), 0) for r in rows]
+
+    y = np.arange(len(rows))
+    fig, ax = plt.subplots(figsize=(9, 4.6))
+    ax.barh(y + 0.19, cls, height=0.36, color='#4c72b0', edgecolor='black', label='classical')
+    ax.barh(y - 0.19, pqc, height=0.36, color='#dd8452', edgecolor='black', label='pqc')
+    for i, v in enumerate(cls):
+        ax.text(v + 250, i + 0.19, f'{v:,}', va='center', fontsize=8)
+    for i, v in enumerate(pqc):
+        ax.text(v + 250, i - 0.19, f'{v:,}', va='center', fontsize=8)
+    ax.axvline(initcwnd, color='crimson', linestyle='--', linewidth=1.2)
+    ax.text(initcwnd + 250, len(rows) - 0.45,
+            f'initcwnd 10 x 1460 = {initcwnd:,} B', color='crimson', fontsize=8)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_xlabel('Handshake bytes on the wire (tickets excluded)')
+    ax.set_title('Only the PQC flight exceeds the initial congestion window')
+    ax.set_xlim(0, max(max(pqc), initcwnd) * 1.18)
+    ax.legend(frameon=False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUT_DIR, 'handshake_bytes.png'), dpi=150)
+    print('  handshake_bytes.png')
+
+
 def main():
     parser = argparse.ArgumentParser(description='PQ-VPN Benchmark Plotter')
     parser.add_argument('--dir', default=RESULTS_DIR,
@@ -224,12 +346,20 @@ def main():
     rs2 = _read_resume(os.path.join(args.dir, 'handshake_resume_pqc.csv'))
     rs.update(rs2)
 
+    wan_c = _read_wan(os.path.join(args.dir, 'wan_handshake_classical.csv'))
+    wan_p = _read_wan(os.path.join(args.dir, 'wan_handshake_pqc.csv'))
+    wres_c = _read_wan_resume(os.path.join(args.dir, 'wan_handshake_resume_classical.csv'))
+    wres_p = _read_wan_resume(os.path.join(args.dir, 'wan_handshake_resume_pqc.csv'))
+    hb = _read_bytes(os.path.join(args.dir, 'handshake_bytes.csv'))
+
     print('Generating plots...')
     _plot_handshake(hs)
     _plot_resume(rs)
     _plot_latency(lat)
     _plot_throughput(tp)
     _plot_file_transfer(ft)
+    _plot_wan(wan_c, wan_p, wres_c, wres_p)
+    _plot_handshake_bytes(hb)
     print(f'Plots saved to: {OUT_DIR}')
 
 
