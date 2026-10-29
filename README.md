@@ -34,6 +34,7 @@ bash pki/gen_classical_ca.sh && bash pki/gen_pqc_ca.sh
 sudo bash scripts/install_cli.sh
 pqvpn up                                                   # connect, wait until routing is live
 pqvpn status                                               # negotiated crypto, tunnel address, bytes
+pqvpn dashboard                                            # live web UI (no root needed)
 pqvpn down                                                 # disconnect, restore routes + DNS
 
 # 3. Live demo on one machine: netns harness → server + 3 clients → ping → iperf3 → teardown
@@ -50,14 +51,15 @@ Once a tunnel is up (`pqvpn <cmd>` is the same thing without the path):
 
 ```bash
 .venv/bin/python3 cli/vpnctl.py status                     # server + every client, ports, bytes, negotiated crypto
-bash scripts/dashboard.sh                                 # http://127.0.0.1:8080, token "demo"
-bash scripts/dashboard.sh --vps                           # same, but for a deployed server, over SSH
+pqvpn dashboard                                           # http://127.0.0.1:8080, token "demo"
+pqvpn dashboard --vps                                     # same, but for a deployed server, over SSH
 .venv/bin/python3 cli/vpnctl.py disconnect
 ```
 
-`dashboard.sh` picks a free port if 8080 is taken; override with
-`PQVPN_DASH_PORT` / `PQVPN_DASH_TOKEN`, or run `dashboard/dashboard_server.py`
-directly for full control.
+The dashboard picks a free port if 8080 is taken; override with
+`pqvpn dashboard --port N --token T`. It runs unprivileged on purpose — the
+daemons' status sockets are mode 0666, so a web server never needs root here.
+`bash scripts/dashboard.sh` is the same thing and still works.
 
 ## What's implemented
 

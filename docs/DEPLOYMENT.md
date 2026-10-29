@@ -200,7 +200,7 @@ Or do all of the above in one command, which also verifies the result:
 
 ```bash
 sudo bash scripts/demo_vps.sh        # --keep leaves the tunnel up afterwards
-bash scripts/dashboard.sh --vps      # the server's dashboard, over an SSH forward
+pqvpn dashboard --vps                # the server's dashboard, over an SSH forward
 ```
 
 `demo_vps.sh` prints the public IP before and after connecting, the negotiated

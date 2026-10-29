@@ -312,6 +312,7 @@ timer and the rate limiter rather than eliminated. The client's hello name is
 |---|---|
 | `up [profile]` | Connect by profile name (`vps`, `pqc`), waiting until routing is actually live, then report the negotiated crypto and the new public IP |
 | `down` | Disconnect and restore routes and DNS |
+| `dashboard [--vps]` | Open the live web dashboard, locally or over an SSH forward to a deployed server. Runs unprivileged. |
 | `connect` | Start a daemon, auto-detecting server or client from the config |
 | `connect-server` / `connect-client` | Start a specific role |
 | `status [role]` | Mode, state, negotiated cryptography, tunnel address, session and daemon uptime, byte counters, per-client table |

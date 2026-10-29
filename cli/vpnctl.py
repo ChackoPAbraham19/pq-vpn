@@ -423,6 +423,37 @@ def disconnect():
 
 
 @cli.command()
+@click.option('--vps', is_flag=True,
+              help="Show the deployed server's tunnels, over an SSH forward")
+@click.option('--port', type=int, default=None, help='Local port (default 8080)')
+@click.option('--token', default=None, help='Token for kick/rekey (default "demo")')
+def dashboard(vps, port, token):
+    """Open the live web dashboard (http://127.0.0.1:8080).
+
+    Runs unprivileged on purpose: the daemons' IPC sockets are mode 0666 so the
+    dashboard can read status without root, and a web server has no business
+    holding privileges it does not need.
+
+    Delegates to scripts/dashboard.sh, which owns the port probing and the
+    --vps SSH forward, so there is one implementation rather than two.
+    """
+    script = os.path.join(PROJECT_DIR, 'scripts', 'dashboard.sh')
+    if not os.path.exists(script):
+        click.echo(f'Error: {script} not found', err=True)
+        sys.exit(1)
+    env = dict(os.environ)
+    if port is not None:
+        env['PQVPN_DASH_PORT'] = str(port)
+    if token is not None:
+        env['PQVPN_DASH_TOKEN'] = token
+    if os.geteuid() == 0 and env.get('SUDO_USER'):
+        click.echo('Note: running the dashboard as root is unnecessary '
+                   '(status sockets are world-readable).', err=True)
+    args = ['bash', script] + (['--vps'] if vps else [])
+    os.execvpe('bash', args, env)
+
+
+@cli.command()
 @click.pass_context
 def down(ctx):
     """Disconnect and restore routes and DNS (alias for disconnect)."""
