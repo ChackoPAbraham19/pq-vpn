@@ -310,6 +310,8 @@ timer and the rate limiter rather than eliminated. The client's hello name is
 
 | Command | Purpose |
 |---|---|
+| `up [profile]` | Connect by profile name (`vps`, `pqc`), waiting until routing is actually live, then report the negotiated crypto and the new public IP |
+| `down` | Disconnect and restore routes and DNS |
 | `connect` | Start a daemon, auto-detecting server or client from the config |
 | `connect-server` / `connect-client` | Start a specific role |
 | `status [role]` | Mode, state, negotiated cryptography, tunnel address, session and daemon uptime, byte counters, per-client table |
@@ -350,12 +352,12 @@ image. `.github/workflows/clean-build.yml` runs the same thing on every push.
 
 Three independent layers.
 
-**Unit suites — 152 checks across five files.** Most drive *real* `openssl`
+**Unit suites — 163 checks across five files.** Most drive *real* `openssl`
 processes rather than mocks, so they test the actual integration:
 
 | Suite | Checks | Covers |
 |---|---|---|
-| `common/test_common.py` | 81 | Framing round-trips, welcome-to-relay end to end over real TLS, slot and port recycling, stale-handshake reaping, rate limiter, CRL revocation against a live `s_server`, config validation, IPC |
+| `common/test_common.py` | 92 | Framing round-trips, welcome-to-relay end to end over real TLS, slot and port recycling, stale-handshake reaping, rate limiter, CRL revocation against a live `s_server`, config validation, IPC |
 | `common/test_net_config.py` | 25 | NAT rule construction, MSS clamp, route protection and restoration, IPv6 guard, DNS fallback, safe TUN teardown |
 | `common/test_keepalive.py` | 7 | Backoff growth, idle detection, keepalive behaviour, session-stop cascade |
 | `common/test_resumption.py` | 14 | Ticket cache paths, atomic rotation, wrapper flags, real OpenSSL prime-then-`Reused` |
@@ -684,7 +686,7 @@ sudo bash scripts/demo.sh --mode pqc --clients 2 --egress
 bash scripts/demo.sh --dry-run --mode pqc
 ```
 
-Runs all 152 checks plus a real handshake benchmark in both modes.
+Runs all 163 checks plus a real handshake benchmark in both modes.
 
 ### In Docker, from a bare image
 

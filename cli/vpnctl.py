@@ -34,6 +34,49 @@ def _daemon_script(mode: str) -> str:
     return os.path.join(PROJECT_DIR, mode, f'vpn_{mode}.py')
 
 
+# Profiles, in the order `up` tries them when given no name. The VPS comes
+# first because that is the real-network path; the netns configs are left out
+# deliberately — they need scripts/setup_routing.sh and belong to demo.sh.
+PROFILE_ORDER = ('vps', 'pqc', '')
+
+
+def profile_config_name(profile: str) -> str:
+    """Config basename for a profile name. '' is the plain client/config.yaml.
+
+    Both daemons reduce --config to its basename and look inside their own
+    directory (client/vpn_client.py), so a profile is just a name, never a path.
+    """
+    return 'config.yaml' if not profile else f'config-{profile}.yaml'
+
+
+def resolve_profile(profile: str | None, exists) -> tuple[str, str] | None:
+    """(profile, config path) for an explicit or default profile, or None.
+
+    `exists` is injected so this is testable without a filesystem.
+    """
+    candidates = (profile,) if profile is not None else PROFILE_ORDER
+    for cand in candidates:
+        path = os.path.join(PROJECT_DIR, 'client', profile_config_name(cand))
+        if exists(path):
+            return cand, path
+    return None
+
+
+def _daemon_log(role: str, instance: str | None = None) -> str:
+    suffix = f'-{instance}' if instance else ''
+    return f'/tmp/pqvpn-{role}{suffix}.log'
+
+
+def _log_tail(path: str, lines: int = 12) -> str:
+    """Last few lines of a daemon log, for printing under an error."""
+    try:
+        with open(path, errors='replace') as fh:
+            tail = fh.read().splitlines()[-lines:]
+    except OSError:
+        return ''
+    return '\n'.join('    ' + line for line in tail if line.strip())
+
+
 def _check_running(role: str, instance: str | None = None) -> int | None:
     pid = read_pid_file(role, instance)
     if pid and os.path.exists(f'/proc/{pid}'):
@@ -66,30 +109,57 @@ def _spawn_daemon(mode: str, config_path: str):
 
     abs_config = os.path.abspath(config_path)
 
+    # The daemon's own output is the only explanation of a failed handshake
+    # (bad CA, expired CRL, no TUN permission). Sending it to DEVNULL meant a
+    # daemon that opened its socket and then died still reported success, with
+    # nothing anywhere to say why. Keep it in a file and show it on failure.
+    log_path = _daemon_log(mode, instance)
+    try:
+        log = open(log_path, 'w')
+    except OSError:
+        log = subprocess.DEVNULL
+
+    # PYTHONUNBUFFERED: writing to a file makes Python block-buffer stdout, so
+    # without this the log stays empty for minutes — empty at exactly the
+    # moment something has gone wrong and it is the only evidence there is.
     proc = subprocess.Popen(
         [sys.executable, script, '--config', abs_config],
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
         start_new_session=True,
         cwd=PROJECT_DIR,
+        env=dict(os.environ, PYTHONUNBUFFERED='1'),
     )
+    if log is not subprocess.DEVNULL:
+        log.close()
+
+    def _fail(msg: str):
+        click.echo(f'Error: {msg}', err=True)
+        tail = _log_tail(log_path)
+        if tail:
+            click.echo(f'  last lines of {log_path}:', err=True)
+            click.echo(tail, err=True)
+        else:
+            click.echo(f'  see {log_path}', err=True)
+        sys.exit(1)
 
     for _ in range(30):
         if os.path.exists(sp):
             break
+        if proc.poll() is not None:
+            _fail(f'{mode} daemon exited before opening its IPC socket.')
         time.sleep(0.2)
     else:
-        click.echo(f'Error: {mode} daemon did not start IPC socket within 6s.', err=True)
         proc.terminate()
         proc.wait()
-        sys.exit(1)
+        _fail(f'{mode} daemon did not start IPC socket within 6s.')
 
     if proc.poll() is not None:
-        click.echo(f'Error: {mode} daemon exited prematurely.', err=True)
-        sys.exit(1)
+        _fail(f'{mode} daemon exited prematurely.')
 
     click.echo(f'{mode.capitalize()} daemon started (pid={proc.pid})')
+    return proc, sp, log_path
 
 
 def _read_status_sock(sp: str) -> dict | None:
@@ -195,6 +265,105 @@ def cli():
     pass
 
 
+def wait_until_connected(read_status, is_alive, timeout: float = 25.0,
+                         interval: float = 0.3, now=time.monotonic,
+                         sleep=time.sleep) -> tuple[str, dict | None]:
+    """Block until the tunnel is actually usable.
+
+    Returns (outcome, last status) where outcome is 'connected', 'died' or
+    'timeout'. The daemon opens its IPC socket early, long before routes and
+    DNS are applied, so waiting on the socket alone returns while traffic is
+    still leaving unprotected. The state only becomes 'connected' once the
+    handshake, the pushed config, the TUN device and the routing are all done.
+
+    Callables are injected so tests need neither a daemon nor the clock.
+    """
+    deadline = now() + timeout
+    last = None
+    while now() < deadline:
+        status = read_status()
+        if status:
+            last = status
+            if status.get('state') == 'connected':
+                return 'connected', status
+        if not is_alive():
+            return 'died', last
+        sleep(interval)
+    return 'timeout', last
+
+
+def _public_ip(timeout: float = 8.0) -> str | None:
+    """Best-effort public IP, for the one line that proves a VPN is a VPN."""
+    try:
+        out = subprocess.run(['curl', '-s', '--max-time', str(int(timeout)),
+                              'ifconfig.me'], capture_output=True, text=True)
+    except OSError:
+        return None
+    ip = out.stdout.strip()
+    return ip if ip and len(ip) <= 45 else None
+
+
+@cli.command()
+@click.argument('profile', required=False)
+@click.option('--no-ip-check', is_flag=True, help='Skip the public-IP lookup')
+def up(profile, no_ip_check):
+    """Connect, and wait until routing is actually live.
+
+    PROFILE names a config in client/ (vps -> client/config-vps.yaml).
+    With no profile, the first of vps, pqc, config.yaml that exists is used.
+    """
+    found = resolve_profile(profile, os.path.exists)
+    if not found:
+        if profile is None:
+            click.echo('Error: no client profile found in client/ '
+                       f'(looked for {", ".join(profile_config_name(p) for p in PROFILE_ORDER)})',
+                       err=True)
+        else:
+            click.echo(f'Error: no profile "{profile}" '
+                       f'({os.path.join("client", profile_config_name(profile))} not found)',
+                       err=True)
+        sys.exit(1)
+    name, config_path = found
+
+    if os.geteuid() != 0:
+        click.echo('Error: connecting needs root (TUN device, routes, DNS). '
+                   'Run: pqvpn up', err=True)
+        sys.exit(1)
+
+    click.echo(f'Connecting [{name or "default"}] via {os.path.relpath(config_path, PROJECT_DIR)} ...')
+    proc, sp, log_path = _spawn_daemon('client', config_path)
+
+    outcome, status = wait_until_connected(
+        read_status=lambda: _read_status_sock(sp),
+        is_alive=lambda: proc.poll() is None,
+    )
+
+    if outcome != 'connected':
+        why = ('the daemon exited' if outcome == 'died'
+               else 'the tunnel did not come up in time')
+        click.echo(f'Error: {why}.', err=True)
+        tail = _log_tail(log_path)
+        if tail:
+            click.echo(f'  last lines of {log_path}:', err=True)
+            click.echo(tail, err=True)
+        else:
+            click.echo(f'  see {log_path}', err=True)
+        sys.exit(1)
+
+    neg = (status or {}).get('negotiated') or {}
+    click.echo('Connected.')
+    click.echo(f'  Tunnel      {status.get("tun_name", "?")} — {status.get("tun_addr", "?")}')
+    if neg:
+        click.echo(f'  Negotiated  {" · ".join(f"{k}={v}" for k, v in sorted(neg.items()))}'
+                   + (' (resumed)' if status.get('resumed') else ''))
+    click.echo(f'  Mode        {status.get("mode", "?")} · {status.get("groups", "?")}')
+    if not no_ip_check:
+        ip = _public_ip()
+        if ip:
+            click.echo(f'  Public IP   {ip}  (traffic now leaves from here)')
+    click.echo('Disconnect with: pqvpn down')
+
+
 @cli.command()
 @click.option('--config', '-c', required=True, help='Config file path')
 def connect(config):
@@ -251,6 +420,13 @@ def disconnect():
                 anything = True
     if not anything:
         click.echo('VPN is not running.')
+
+
+@cli.command()
+@click.pass_context
+def down(ctx):
+    """Disconnect and restore routes and DNS (alias for disconnect)."""
+    ctx.invoke(disconnect)
 
 
 def _print_status(label: str, s: dict):

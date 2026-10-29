@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# pqvpn — the PQ-VPN command.
+#
+#   pqvpn up            connect (default profile) and wait until routing is live
+#   pqvpn up vps        connect using client/config-vps.yaml
+#   pqvpn down          disconnect and restore routes + DNS
+#   pqvpn status        what is connected, and the crypto actually negotiated
+#
+# Install once so it works from any directory:  sudo bash scripts/install_cli.sh
+#
+# This wrapper exists to remove three pieces of ceremony that have nothing to do
+# with the VPN: finding the project, finding its virtualenv, and remembering
+# sudo. Everything after it is cli/vpnctl.py.
+
+# readlink -f, not dirname "$0": when this is reached through the symlink in
+# /usr/local/bin, $0 is the symlink and its dirname is /usr/local/bin. Resolving
+# to the real file keeps the project findable without hardcoding a path, so a
+# moved checkout still works.
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+PDIR="$(cd "$(dirname "$SELF")" && pwd)"
+PY="${PDIR}/.venv/bin/python3"
+VPNCTL="${PDIR}/cli/vpnctl.py"
+
+[ -x "$PY" ] || {
+    echo "pqvpn: no virtualenv at ${PY}" >&2
+    echo "       run: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+    exit 1
+}
+[ -f "$VPNCTL" ] || { echo "pqvpn: cannot find ${VPNCTL}" >&2; exit 1; }
+
+# TUN devices, routing and DNS all need root. Re-exec rather than making the
+# user remember, so the only thing they see is one password prompt. `status`
+# and `--help` are read-only and work fine unprivileged, so they are exempt —
+# a demo shouldn't ask for a password just to print the tunnel's state.
+case "${1:-}" in
+    status|--help|-h|help|'') ;;
+    *)
+        if [ "$(id -u)" -ne 0 ]; then
+            exec sudo -p "pqvpn needs root for TUN and routing — password for %u: " \
+                 "$SELF" "$@"
+        fi
+        ;;
+esac
+
+exec "$PY" "$VPNCTL" "$@"

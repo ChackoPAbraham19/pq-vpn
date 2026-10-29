@@ -30,17 +30,23 @@ sudo bash scripts/install_custom_openssl.sh
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 bash pki/gen_classical_ca.sh && bash pki/gen_pqc_ca.sh
 
-# 2. Live demo on one machine: netns harness → server + 3 clients → ping → iperf3 → teardown
+# 2. Install the `pqvpn` command (once) — then connect from anywhere
+sudo bash scripts/install_cli.sh
+pqvpn up                                                   # connect, wait until routing is live
+pqvpn status                                               # negotiated crypto, tunnel address, bytes
+pqvpn down                                                 # disconnect, restore routes + DNS
+
+# 3. Live demo on one machine: netns harness → server + 3 clients → ping → iperf3 → teardown
 sudo bash scripts/demo.sh --mode pqc --clients 3           # add --keep to leave it running
 
-# 3. Same tunnel over the real internet, against a deployed VPS (docs/DEPLOYMENT.md)
+# 4. Same tunnel over the real internet, against a deployed VPS (docs/DEPLOYMENT.md)
 sudo bash scripts/demo_vps.sh              # public IP before/after, DNS, a real website
 
-# 4. Or prove it builds from a bare Ubuntu 24.04 (Docker)
+# 5. Or prove it builds from a bare Ubuntu 24.04 (Docker)
 bash scripts/clean_build_check.sh
 ```
 
-Once a tunnel is up:
+Once a tunnel is up (`pqvpn <cmd>` is the same thing without the path):
 
 ```bash
 .venv/bin/python3 cli/vpnctl.py status                     # server + every client, ports, bytes, negotiated crypto
@@ -55,7 +61,7 @@ directly for full control.
 
 ## What's implemented
 
-Everything below is exercised by the unit suites (**152 tests**, `demo.sh --dry-run`) and
+Everything below is exercised by the unit suites (**163 tests**, `demo.sh --dry-run`) and
 was verified live in the network-namespace harness with 2–3 concurrent PQC clients.
 
 - **Dual-mode PKI** — ECDSA P-256 chain and ML-DSA-65 chain, both with mutual TLS.

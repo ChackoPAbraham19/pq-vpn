@@ -612,6 +612,83 @@ def test_ipc_server_survives_caller_hangup():
             du.socket_path = orig
 
 
+def test_profile_resolution():
+    """`pqvpn up [profile]` maps a name to a config in client/, never a path."""
+    from cli.vpnctl import resolve_profile, profile_config_name
+
+    test('named profile -> config-<name>.yaml',
+         profile_config_name('vps') == 'config-vps.yaml')
+    test('empty profile -> plain config.yaml',
+         profile_config_name('') == 'config.yaml')
+
+    have_all = lambda path: True
+    got = resolve_profile(None, have_all)
+    test('default prefers vps when present',
+         got is not None and got[0] == 'vps' and got[1].endswith('config-vps.yaml'))
+
+    only_pqc = lambda path: path.endswith('config-pqc.yaml')
+    got = resolve_profile(None, only_pqc)
+    test('default falls back to pqc', got is not None and got[0] == 'pqc')
+
+    got = resolve_profile('vps', have_all)
+    test('explicit profile is honoured', got is not None and got[0] == 'vps')
+
+    test('missing explicit profile resolves to nothing',
+         resolve_profile('nope', lambda path: False) is None)
+    test('no profiles at all resolves to nothing',
+         resolve_profile(None, lambda path: False) is None)
+
+
+def test_wait_until_connected():
+    """`up` must wait for state=connected, not merely for the IPC socket.
+
+    Regression: _spawn_daemon returned as soon as the socket appeared, which
+    happens long before routes and DNS are applied — so the command reported
+    success while traffic was still leaving outside the tunnel. Clock and
+    daemon are injected, so this is deterministic.
+    """
+    from cli.vpnctl import wait_until_connected
+
+    ticks = {'t': 0.0}
+    def clock():
+        return ticks['t']
+    def advance(_):
+        ticks['t'] += 1.0
+
+    # The socket answers 'handshake-in-progress' twice before it is really up.
+    states = iter([{'state': 'handshake-in-progress'},
+                   {'state': 'handshake-in-progress'},
+                   {'state': 'connected', 'tun_addr': '10.8.0.2/24'}])
+    outcome, status = wait_until_connected(
+        read_status=lambda: next(states, {'state': 'connected'}),
+        is_alive=lambda: True, now=clock, sleep=advance)
+    test('waits through handshake, then reports connected',
+         outcome == 'connected' and status.get('tun_addr') == '10.8.0.2/24')
+
+    # A daemon that dies mid-handshake is a failure, not a timeout.
+    ticks['t'] = 0.0
+    alive = iter([True, False])
+    outcome, _ = wait_until_connected(
+        read_status=lambda: {'state': 'handshake-in-progress'},
+        is_alive=lambda: next(alive, False), now=clock, sleep=advance)
+    test('daemon exiting during handshake is reported as died', outcome == 'died')
+
+    # Never reaching 'connected' must time out rather than hang or claim success.
+    ticks['t'] = 0.0
+    outcome, _ = wait_until_connected(
+        read_status=lambda: {'state': 'reconnecting'},
+        is_alive=lambda: True, now=clock, sleep=advance, timeout=5.0)
+    test('a tunnel that never comes up times out', outcome == 'timeout')
+
+    # A socket that is not answering yet must not be mistaken for success.
+    ticks['t'] = 0.0
+    outcome, status = wait_until_connected(
+        read_status=lambda: None, is_alive=lambda: True,
+        now=clock, sleep=advance, timeout=3.0)
+    test('silent status socket is not treated as connected',
+         outcome == 'timeout' and status is None)
+
+
 def test_crl_expiry_warning():
     """An expired or near-expiry CRL is named at startup, not during handshakes.
 
@@ -1179,6 +1256,8 @@ if __name__ == '__main__':
     test_ipc_server_survives_caller_hangup()
     test_crl_expiry_warning()
     test_crl_next_update_parses_openssl_format()
+    test_profile_resolution()
+    test_wait_until_connected()
     test_vpnctl_eacces_handling()
     test_pool_pressure_reclaim()
     test_ipc_shutdown_command()

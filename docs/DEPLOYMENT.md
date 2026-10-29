@@ -176,10 +176,23 @@ On any Linux machine with the PQC OpenSSL stack and `pki/certs/pqc/{ca,client}.*
 
 ```bash
 cp client/config-vps.example.yaml client/config-vps.yaml     # set server_host
-sudo .venv/bin/python3 client/vpn_client.py --config client/config-vps.yaml
+sudo bash scripts/install_cli.sh                             # once: puts `pqvpn` on PATH
+pqvpn up                                                     # connect (prompts for sudo)
 curl ifconfig.me                                             # => VPS IP
-.venv/bin/python3 cli/vpnctl.py status
+pqvpn status
+pqvpn down
 ```
+
+`pqvpn up` takes a profile name, not a path: `pqvpn up vps` is
+`client/config-vps.yaml`, `pqvpn up pqc` is `client/config-pqc.yaml`, and bare
+`pqvpn up` picks the first that exists. It returns only once the tunnel is
+actually usable — the daemon opens its IPC socket well before routes and DNS
+are applied, so waiting on the socket alone would hand back control while
+traffic was still leaving outside the tunnel. If the daemon fails, the command
+prints the daemon's own error and the path to `/tmp/pqvpn-client.log`.
+
+The long form still works and is what `pqvpn` runs underneath:
+`sudo .venv/bin/python3 client/vpn_client.py --config client/config-vps.yaml`.
 
 Unlike the netns harness, leave `PQVPN_SKIP_DNS` unset so the pushed DNS is applied.
 
