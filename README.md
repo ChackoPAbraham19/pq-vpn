@@ -55,7 +55,7 @@ directly for full control.
 
 ## What's implemented
 
-Everything below is exercised by the unit suites (**143 tests**, `demo.sh --dry-run`) and
+Everything below is exercised by the unit suites (**152 tests**, `demo.sh --dry-run`) and
 was verified live in the network-namespace harness with 2–3 concurrent PQC clients.
 
 - **Dual-mode PKI** — ECDSA P-256 chain and ML-DSA-65 chain, both with mutual TLS.
@@ -74,7 +74,9 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
   per-source token bucket (1/s, burst 3) on the welcome port; the config push is
   validated before touching routes or DNS.
 - **Per-client certificates + revocation** — `pki/issue_client.sh` mints a cert per
-  client from a real CA database; `pki/revoke_client.sh <mode> <name> --kick` puts it
+  client from a real CA database; `pki/refresh_crl.sh <mode>` reissues the CRL
+  before it expires (it carries its own validity window, independent of the
+  certificates); `pki/revoke_client.sh <mode> <name> --kick` puts it
   on the CRL every new session checks and ends the live tunnel. Works for both PKIs
   (the CRL is ML-DSA-65-signed in PQC mode).
 - **Real networking** — NAT MASQUERADE + FORWARD rules, TCP MSS clamping, dnsmasq on

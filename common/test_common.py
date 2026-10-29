@@ -612,6 +612,74 @@ def test_ipc_server_survives_caller_hangup():
             du.socket_path = orig
 
 
+def test_crl_expiry_warning():
+    """An expired or near-expiry CRL is named at startup, not during handshakes.
+
+    Regression: pki/ca.cnf shipped default_crl_days=30 against 10-year certs,
+    so the CRL silently expired a month after the CA was generated. From then
+    on `-crl_check -verify_return_error` refused every client, and the only
+    evidence was "error 12 ... CRL has expired" inside a failed TLS exchange.
+    Dates are injected so this does not depend on the wall clock.
+    """
+    from datetime import datetime, timedelta, timezone
+    from server.vpn_server import crl_expiry_warning
+
+    now = datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc)
+    path = '/tmp/crl.pem'
+
+    healthy = crl_expiry_warning(now + timedelta(days=3650), now, path)
+    test('healthy CRL warns about nothing', healthy is None)
+
+    expired = crl_expiry_warning(now - timedelta(days=7), now, path)
+    test('expired CRL is reported',
+         expired is not None and 'EXPIRED' in expired)
+    test('expired CRL message names the fix',
+         expired is not None and 'refresh_crl.sh' in expired and path in expired)
+
+    soon = crl_expiry_warning(now + timedelta(days=3), now, path)
+    test('CRL expiring within 7 days warns early',
+         soon is not None and 'EXPIRED' not in soon and 'refresh_crl.sh' in soon)
+
+    edge = crl_expiry_warning(now + timedelta(days=30), now, path)
+    test('CRL 30 days out does not warn', edge is None)
+
+    test('unreadable CRL is not treated as expired',
+         crl_expiry_warning(None, now, path) is None)
+
+
+def test_crl_next_update_parses_openssl_format():
+    """nextUpdate parsing handles openssl's padded single-digit days."""
+    import subprocess
+    from datetime import timezone
+    import server.vpn_server as vs
+
+    captured = {}
+
+    class _Fake:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    orig = subprocess.run
+    for raw, expect_day in (('nextUpdate=Oct 26 17:33:54 2036 GMT\n', 26),
+                            ('nextUpdate=Oct  5 07:01:02 2036 GMT\n', 5)):
+        subprocess.run = lambda *a, **k: _Fake(raw)
+        try:
+            got = vs.crl_next_update('/tmp/crl.pem', 'pqc')
+        finally:
+            subprocess.run = orig
+        captured[expect_day] = got
+        test(f'parses nextUpdate with day {expect_day}',
+             got is not None and got.day == expect_day and got.year == 2036
+             and got.tzinfo is timezone.utc)
+
+    subprocess.run = lambda *a, **k: _Fake('garbage\n')
+    try:
+        test('unparseable nextUpdate returns None',
+             vs.crl_next_update('/tmp/crl.pem', 'pqc') is None)
+    finally:
+        subprocess.run = orig
+
+
 def test_vpnctl_eacces_handling():
     """vpnctl reports 'root-owned socket' on EACCES instead of 'not running'."""
     import socket
@@ -1109,6 +1177,8 @@ if __name__ == '__main__':
     test_status_negotiated_lifecycle()
     test_ipc_server_socket_permissions()
     test_ipc_server_survives_caller_hangup()
+    test_crl_expiry_warning()
+    test_crl_next_update_parses_openssl_format()
     test_vpnctl_eacces_handling()
     test_pool_pressure_reclaim()
     test_ipc_shutdown_command()

@@ -295,3 +295,45 @@ three affect how the numbers should be described in the paper.
       the version note in `docs/BENCHMARKS.md`; recorded here so it is an action
       and not just a caveat. The ratio is not expected to move — both modes
       traverse identical code paths — but that is an assumption until measured.
+
+## Incident: VPN down 2026-10-22 to 10-29 (CRL expiry + CA mismatch) [fixed 2026-10-29]
+
+Three faults, two causes. Recorded because the failure modes were all
+misleading and the diagnosis is worth not repeating.
+
+- [x] **Root cause: `pki/ca.cnf` had `default_crl_days = 30` against 10-year
+      certificates.** Every CRL died one month after its CA was generated, and
+      the server passes `-CRL crl.pem -crl_check -verify_return_error` to every
+      session, so an expired CRL rejects every client. OpenSSL reports only
+      `error 12 ... CRL has expired` from inside a failed handshake, naming
+      neither the file nor the cause. Both PKIs expired on 2026-10-22. Raised to
+      3650 to match `default_days`, with the security trade-off written into
+      `ca.cnf` (short CRL windows are deliberate in production, but assume a
+      CDP/OCSP refresh this project does not have).
+- [x] **Secondary: regenerating the CA to fix it.** The natural move when the
+      only CRL-producing scripts were `gen_*_ca.sh` and `revoke_client.sh` was
+      to re-run `gen_pqc_ca.sh`, which mints a *new CA*. The laptop then had CA
+      `25:01:5F…` (Oct 29) while the VPS still trusted `81:FC:A4…` (Sep 22), so
+      mutual TLS failed with
+      `verify error:num=19:self-signed certificate in certificate chain` on the
+      *client* certificate. The old local PKI was overwritten and `pki/certs/`
+      is git-ignored, so there was no going back — the new PKI had to be pushed
+      to the VPS. Fixed by `rsync`-ing `pki/certs/pqc/` (certs **and** `db/`, so
+      `revoke_client.sh --kick` still works server-side) and restarting.
+- [x] **Added `pki/refresh_crl.sh <mode>`** — the missing one-command path that
+      would have prevented the whole incident. It touches no keys and no
+      certificates, only the CRL's dates, and verifies the result with the same
+      `-crl_check` the server enforces.
+- [x] **Added a startup preflight** (`crl_expiry_warning` in
+      `server/vpn_server.py`): the daemon now names an expired or
+      about-to-expire CRL at startup, with the fix command, instead of leaving
+      it to be inferred from failed handshakes. 9 new tests with injected dates
+      (suites now 152).
+- [ ] Watch: the diagnostic that *looked* authoritative was useless. Running
+      plain `openssl verify` on an ML-DSA certificate fails at key decoding
+      (`X509_PUBKEY_get0: decode error`) long before it reaches dates or the
+      CRL, because the system OpenSSL cannot parse post-quantum keys. Any PKI
+      diagnostic must use `/opt/openssl-pqc/bin/openssl` with
+      `-provider oqsprovider -provider default`. Worth folding into
+      `scripts/diagnose_tunnel.sh`.
+

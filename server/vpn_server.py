@@ -10,6 +10,7 @@ import select
 import json
 import yaml
 import argparse
+from datetime import datetime, timezone
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
@@ -147,6 +148,53 @@ def crl_serial_count(crl_path: str, mode: str) -> int:
     return out.count('Serial Number:')
 
 
+def crl_next_update(crl_path: str, mode: str) -> datetime | None:
+    """Parse a PEM CRL's nextUpdate as an aware UTC datetime, or None."""
+    import subprocess
+    from common.openssl_wrapper import _make_env
+    try:
+        out = subprocess.run(['openssl', 'crl', '-in', crl_path, '-noout', '-nextupdate'],
+                             capture_output=True, text=True, env=_make_env(mode)).stdout
+    except OSError:
+        return None
+    _, _, value = out.strip().partition('=')
+    # openssl prints "Oct 26 17:33:54 2036 GMT", padding single-digit days with
+    # a second space; collapse whitespace before parsing.
+    value = ' '.join(value.replace('GMT', '').split())
+    try:
+        return datetime.strptime(value, '%b %d %H:%M:%S %Y').replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def crl_expiry_warning(next_update, now, crl_path: str,
+                       warn_days: int = 7) -> str | None:
+    """Message when a CRL has expired or is about to; None when it is healthy.
+
+    Pure (dates passed in) so tests do not depend on the wall clock.
+
+    A CRL carries its own validity window, and the per-session
+    `-crl_check -verify_return_error` turns an expired one into a *handshake*
+    failure: every client is refused, and OpenSSL reports only
+    "error 12 ... CRL has expired" from inside the failed TLS exchange, where
+    nothing points at the file. The daemon can see this at startup, so it says
+    so there.
+    """
+    if next_update is None:
+        return None
+    stamp = next_update.strftime('%Y-%m-%d %H:%M UTC')
+    remaining = next_update - now
+    if remaining.total_seconds() <= 0:
+        return (f'[server] CRL EXPIRED on {stamp} ({crl_path}). Every client will be '
+                f'rejected during the TLS handshake ("CRL has expired"). '
+                f'Fix: bash pki/refresh_crl.sh <classical|pqc>')
+    if remaining.days <= warn_days:
+        return (f'[server] CRL expires in {remaining.days}d, on {stamp} ({crl_path}); '
+                f'after that every client is rejected. '
+                f'Refresh: bash pki/refresh_crl.sh <classical|pqc>')
+    return None
+
+
 def idle_monitor(manager, idle_timeout, handshake_timeout, status, stop):
     """Teardown sessions that have been idle (no traffic/keepalive) too long,
     and slot claims whose client never completed mTLS within handshake_timeout.
@@ -263,6 +311,10 @@ def main():
             n = crl_serial_count(crl_file, mode)
             print(f'[server] CRL: {crl_file} ({n} revoked serial{"s" if n != 1 else ""}); '
                   'checked on every new session')
+            crl_warning = crl_expiry_warning(
+                crl_next_update(crl_file, mode), datetime.now(timezone.utc), crl_file)
+            if crl_warning:
+                print(crl_warning, file=sys.stderr, flush=True)
         else:
             print(f'[server] no CRL at {crl_file}: revocation disabled '
                   '(run pki/gen_*_ca.sh to create one)')

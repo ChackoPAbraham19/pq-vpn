@@ -235,6 +235,37 @@ The server loads `crl.pem` for every new session, so the ban holds from the
 client's next handshake (`alert certificate revoked`). `vpnctl status` and the
 dashboard show each tunnel's name.
 
+### 6.4a-crl Keeping the CRL valid
+
+A CRL has its own validity window, separate from the certificates. The server
+passes `-CRL crl.pem -crl_check -verify_return_error` to every session, so an
+expired CRL **rejects every client** — and OpenSSL reports it only as
+`error 12 ... CRL has expired` from inside a failed handshake, where nothing
+names the file. The daemon now warns at startup, once it has expired or is
+within 7 days of doing so.
+
+```bash
+openssl crl -in pki/certs/pqc/crl.pem -noout -nextupdate   # check
+bash pki/refresh_crl.sh pqc                                # reissue
+rsync -a pki/certs/pqc/ ubuntu@<ip>:/opt/pqvpn/pki/certs/pqc/
+ssh ubuntu@<ip> 'sudo systemctl restart pqvpn-server'
+```
+
+Never run `pki/gen_pqc_ca.sh` to fix an expired CRL. It mints a **new CA**, and
+every certificate already distributed — including the server's own copy —
+stops verifying, which shows up as
+`verify error:num=19:self-signed certificate in certificate chain`. Checking
+that both ends agree takes one command per side:
+
+```bash
+openssl x509 -in pki/certs/pqc/ca.crt -noout -fingerprint -sha256
+```
+
+Note that `openssl` here must be the PQC build (`/opt/openssl-pqc/bin/openssl`
+with `-provider oqsprovider -provider default`). The system OpenSSL cannot
+decode ML-DSA keys and fails earlier, with an unrelated-looking
+`X509_PUBKEY_get0: decode error`.
+
 ### 6.4b ufw + security group
 
 ```bash
