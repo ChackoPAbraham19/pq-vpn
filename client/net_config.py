@@ -16,6 +16,14 @@ import sys
 
 RESOLV_CONF = '/etc/resolv.conf'
 _RESOLV_BACKUP = '/tmp/pqvpn.client.resolv.conf.bak'
+# On a systemd machine /etc/resolv.conf is a SYMLINK into /run/systemd/resolve/.
+# We cannot write through it (fs.protected_regular gives EPERM even for root),
+# so the file at that path gets replaced — which destroys the symlink. Record
+# where it pointed, beside the content backup, so teardown can put the link
+# back instead of leaving a static file that no longer follows systemd.
+# A sidecar file rather than in-memory state: a daemon that is killed does not
+# run its teardown, and the next run has to be able to repair what it left.
+_RESOLV_LINK = '/tmp/pqvpn.client.resolv.conf.link'
 
 # Per-process DNS outcome memos: a dead path is probed at most ONCE, then
 # remembered silently. Ordering that callers must respect:
@@ -197,6 +205,56 @@ def apply_tunnel_net(config: dict, dry_run=False) -> dict:
     return applied
 
 
+def _save_resolv_link():
+    """Record /etc/resolv.conf's symlink target beside the content backup."""
+    try:
+        if os.path.islink(RESOLV_CONF):
+            with open(_RESOLV_LINK, 'w') as fh:
+                fh.write(os.readlink(RESOLV_CONF))
+        elif os.path.exists(_RESOLV_LINK):
+            os.unlink(_RESOLV_LINK)   # it was a plain file this time
+    except OSError:
+        pass
+
+
+def _restore_resolv_link() -> bool:
+    """Put the symlink back. True when a link was restored.
+
+    Without this, a connect/disconnect cycle on the fallback path silently
+    converts /etc/resolv.conf from a systemd-managed symlink into a static
+    file: DNS keeps working, so nothing looks wrong, but the file no longer
+    follows systemd-resolved and goes stale the next time the stub changes.
+    """
+    try:
+        with open(_RESOLV_LINK) as fh:
+            target = fh.read().strip()
+    except OSError:
+        return False
+    if not target:
+        return False
+    try:
+        if os.path.islink(RESOLV_CONF) and os.readlink(RESOLV_CONF) == target:
+            pass                       # already correct; nothing to do
+        else:
+            tmp = RESOLV_CONF + '.pqvpn.link.tmp'
+            if os.path.lexists(tmp):
+                os.unlink(tmp)
+            # symlink + rename, so the path is never missing even for an
+            # instant: a resolver reading it mid-teardown must not see a gap.
+            os.symlink(target, tmp)
+            os.replace(tmp, RESOLV_CONF)
+    except OSError as e:
+        print(f'[net_config] could not restore the {RESOLV_CONF} symlink '
+              f'-> {target} ({e}); it is a regular file now', file=sys.stderr)
+        return False
+    finally:
+        try:
+            os.unlink(_RESOLV_LINK)
+        except OSError:
+            pass
+    return True
+
+
 def _set_resolv_conf(dns_servers, dry_run=False) -> str | None:
     """resolv.conf fallback: snapshot existing file, then write nameservers.
 
@@ -215,12 +273,15 @@ def _set_resolv_conf(dns_servers, dry_run=False) -> str | None:
         return None
     if not os.path.exists(_RESOLV_BACKUP):
         try:
+            # copy2 follows the symlink, which is what we want for the content.
             shutil.copy2(RESOLV_CONF, _RESOLV_BACKUP)
         except OSError as e:
             _resolv_conf_dead = True
             print(f'[net_config] resolv.conf backup failed, DNS left untouched ({e})',
                   file=sys.stderr)
             return None
+        # ...but the content is only half of it: note the link itself.
+        _save_resolv_link()
     content = ''.join(f'nameserver {d}\n' for d in dns_servers)
     tmp = RESOLV_CONF + '.pqvpn.tmp'
     try:
@@ -273,8 +334,12 @@ def restore_tunnel_net(applied: dict, config: dict, dry_run=False):
         if dry_run:
             print(f'[net_config] would restore {RESOLV_CONF} from {_RESOLV_BACKUP}')
         else:
+            # The link first: restoring it makes the content copy unnecessary,
+            # because the target supplies the content.
+            relinked = _restore_resolv_link()
             if os.path.exists(_RESOLV_BACKUP):
-                shutil.copy2(_RESOLV_BACKUP, RESOLV_CONF)
+                if not relinked:
+                    shutil.copy2(_RESOLV_BACKUP, RESOLV_CONF)
                 try:
                     os.remove(_RESOLV_BACKUP)
                 except OSError:

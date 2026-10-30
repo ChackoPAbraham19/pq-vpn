@@ -226,6 +226,94 @@ def test_destroy_tun_safe():
     test('destroy_tun is safe on stale/missing devices', ok)
 
 
+def test_resolv_conf_symlink_preserved():
+    """A connect/disconnect cycle must leave /etc/resolv.conf a symlink.
+
+    Regression: the fallback path replaces the file (it cannot write *through*
+    the symlink — fs.protected_regular gives EPERM even for root), and restore
+    copied the saved *contents* back. That silently converted a
+    systemd-managed symlink into a static file. DNS kept working, so nothing
+    looked wrong, but the file no longer followed systemd-resolved.
+
+    Runs against real files in a temp dir, so it tests the syscalls rather
+    than a description of them.
+    """
+    import tempfile
+    import client.net_config as nc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        stub = os.path.join(tmp, 'stub-resolv.conf')
+        with open(stub, 'w') as fh:
+            fh.write('nameserver 127.0.0.53\n')
+        live = os.path.join(tmp, 'resolv.conf')
+        os.symlink(stub, live)
+
+        # getattr/setattr, not attribute access: against a build without the
+        # fix this must report the behavioural failure below, not die here.
+        orig = (nc.RESOLV_CONF, nc._RESOLV_BACKUP,
+                getattr(nc, '_RESOLV_LINK', None), nc._resolv_conf_dead)
+        nc.RESOLV_CONF = live
+        nc._RESOLV_BACKUP = os.path.join(tmp, 'backup')
+        nc._RESOLV_LINK = os.path.join(tmp, 'link')
+        nc._resolv_conf_dead = False
+        try:
+            method = nc._set_resolv_conf(['10.8.0.1'])
+            test('fallback writes the tunnel nameserver', method == 'resolv.conf')
+            with open(live) as fh:
+                body = fh.read()
+            test('tunnel DNS is actually in the file', 'nameserver 10.8.0.1' in body)
+            test('while connected it is a plain file, not a link',
+                 not os.path.islink(live))
+            test('the symlink target was recorded', os.path.exists(nc._RESOLV_LINK))
+
+            nc.restore_tunnel_net({'dns_method': 'resolv.conf'},
+                                  {'gateway': '10.8.0.1', 'tun_name': 'tun0'})
+
+            test('restore puts the symlink back', os.path.islink(live))
+            test('and it points where it did before',
+                 os.path.islink(live) and os.readlink(live) == stub)
+            with open(live) as fh:
+                test('so the original contents are served again',
+                     fh.read() == 'nameserver 127.0.0.53\n')
+            test('no leftover state in /tmp',
+                 not os.path.exists(nc._RESOLV_BACKUP)
+                 and not os.path.exists(nc._RESOLV_LINK))
+        finally:
+            (nc.RESOLV_CONF, nc._RESOLV_BACKUP, nc._RESOLV_LINK,
+             nc._resolv_conf_dead) = orig
+
+
+def test_resolv_conf_plain_file_still_restored():
+    """When resolv.conf was a regular file, restore must copy it back."""
+    import tempfile
+    import client.net_config as nc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        live = os.path.join(tmp, 'resolv.conf')
+        with open(live, 'w') as fh:
+            fh.write('nameserver 192.168.1.1\n')
+
+        orig = (nc.RESOLV_CONF, nc._RESOLV_BACKUP,
+                getattr(nc, '_RESOLV_LINK', None), nc._resolv_conf_dead)
+        nc.RESOLV_CONF = live
+        nc._RESOLV_BACKUP = os.path.join(tmp, 'backup')
+        nc._RESOLV_LINK = os.path.join(tmp, 'link')
+        nc._resolv_conf_dead = False
+        try:
+            nc._set_resolv_conf(['10.8.0.1'])
+            test('no link recorded for a plain file',
+                 not os.path.exists(nc._RESOLV_LINK))
+            nc.restore_tunnel_net({'dns_method': 'resolv.conf'},
+                                  {'gateway': '10.8.0.1', 'tun_name': 'tun0'})
+            with open(live) as fh:
+                test('plain file restored by content',
+                     fh.read() == 'nameserver 192.168.1.1\n')
+            test('and it is still a plain file', not os.path.islink(live))
+        finally:
+            (nc.RESOLV_CONF, nc._RESOLV_BACKUP, nc._RESOLV_LINK,
+             nc._resolv_conf_dead) = orig
+
+
 def test_client_restore_command():
     from client.net_config import restore_tunnel_net
     cfg = {'gateway': '10.8.0.1', 'tun_name': 'tun0', 'route_metric': 50}
@@ -298,6 +386,8 @@ if __name__ == '__main__':
     test_client_protect_route_order()
     test_client_no_protect_when_no_prior_default()
     test_destroy_tun_safe()
+    test_resolv_conf_symlink_preserved()
+    test_resolv_conf_plain_file_still_restored()
     test_client_restore_command()
     test_client_restore_idempotent()
     print()
