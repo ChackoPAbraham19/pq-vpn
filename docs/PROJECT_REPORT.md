@@ -274,6 +274,17 @@ real leak:
   and v6-capable sites would otherwise be reached outside it with the real
   address. Removed on disconnect.
 
+**DNS restoration.** On a systemd machine `/etc/resolv.conf` is a *symlink*
+into `/run/systemd/resolve/`. The client cannot write through it —
+`fs.protected_regular` returns EPERM even for root — so the fallback path
+replaces the file at that path, which destroys the link. Teardown therefore
+restores the **link**, not only the bytes: the target is recorded in a sidecar
+file beside the content backup, chosen over in-memory state because a daemon
+that is killed never runs its teardown and the next run has to repair what it
+left. Restoring contents alone would leave a static `/etc/resolv.conf` that
+still resolves — so nothing looks wrong — but no longer follows
+`systemd-resolved`.
+
 **MTU handling.** The tunnel MTU is 1400 against a typical 1500 upstream. The
 server clamps TCP MSS to the path MTU in both directions; without it, sites
 sending full-size segments stall on path-MTU discovery — pages half-load and
