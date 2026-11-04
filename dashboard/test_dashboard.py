@@ -224,6 +224,95 @@ def test_status_reports_control_mode():
         client.close()
 
 
+def _page_script():
+    """The inline <script> block of index.html, as text."""
+    path = os.path.join(os.path.dirname(__file__), 'index.html')
+    with open(path, encoding='utf-8') as fh:
+        html = fh.read()
+    start = html.index('<script>\n') + len('<script>\n')
+    return html[start:html.index('</script>', start)]
+
+
+def test_page_auth_wiring():
+    """Every mutating fetch in the page must send the token header.
+
+    This exists because of a bug that a fully green suite could not see. The
+    page declared its header-building code inside disconnect() and the control
+    panel called `headers()`, which was defined nowhere, so every Connect and
+    Disconnect click threw a ReferenceError before fetch was reached -- the
+    buttons were dead even when the dashboard was launched correctly with
+    --control. Nothing here executed the page's JavaScript, and the only test
+    touching index.html asserted that it is served, not that it works.
+
+    A static check is enough to stop a recurrence: there must be exactly one
+    definition of the helper, every POST must pass it, and the old misspelling
+    must not come back.
+    """
+    js = _page_script()
+    # Strip line comments: this file describes the bug in prose, and the prose
+    # names the broken call.
+    code = '\n'.join(line.split('//')[0] for line in js.splitlines())
+
+    test('the page defines authHeaders() exactly once',
+         code.count('function authHeaders') == 1,
+         f'found {code.count("function authHeaders")}')
+
+    # The call that broke: a helper that was never a function. Match only a
+    # bare `headers(`, not `authHeaders(` or `foo.headers(`.
+    import re as _re
+    stray = _re.findall(r'(?<![\w.$])headers\s*\(', code)
+    test('no call to the undefined headers()', not stray,
+         'index.html calls headers(), which does not exist')
+
+    # Each fetch( ... ) call site, trimmed to its own argument list.
+    sites = [chunk[:chunk.find('})') + 2 if '})' in chunk else 400]
+             for chunk in js.split('fetch(')[1:]]
+    posts = [s for s in sites if "method: 'POST'" in s]
+    test('the page has mutating fetch calls to check', len(posts) >= 2,
+         f'found {len(posts)}')
+    unguarded = [s for s in posts if 'authHeaders()' not in s]
+    test('every POST sends the token header', not unguarded,
+         f'{len(unguarded)} unguarded: ' + '; '.join(s[:70] for s in unguarded))
+
+
+def test_token_embedded_for_loopback():
+    """The token is embedded in the page locally, and withheld when exposed."""
+    from fastapi.testclient import TestClient
+    import dashboard.dashboard_server as ds
+
+    client = TestClient(ds.app)
+    orig_loop, orig_tok = ds.LOOPBACK, ds.DASH_TOKEN
+    try:
+        ds.DASH_TOKEN = 'embed-me-123'
+
+        ds.LOOPBACK = True
+        r = client.get('/')
+        test('loopback: GET / embeds the live token',
+             '<meta name="pqvpn-token" content="embed-me-123">' in r.text,
+             r.text[:160])
+        test('and tells the browser not to cache it',
+             r.headers.get('cache-control') == 'no-store',
+             str(r.headers.get('cache-control')))
+
+        # Read per request, not captured at import: main() sets it after this
+        # module is already loaded.
+        ds.DASH_TOKEN = 'rotated-456'
+        test('a rotated token is picked up without a restart',
+             'rotated-456' in client.get('/').text)
+
+        ds.LOOPBACK = False
+        r = client.get('/')
+        # The page always *mentions* pqvpn-token (it reads the meta tag), so
+        # assert on the injected tag and on the secret itself, not the name.
+        test('non-loopback: the token is NOT embedded',
+             '<meta name="pqvpn-token"' not in r.text and 'rotated-456' not in r.text,
+             r.text[:160])
+        test('but the page is still served', r.status_code == 200 and 'PQ-VPN Dashboard' in r.text)
+    finally:
+        ds.LOOPBACK, ds.DASH_TOKEN = orig_loop, orig_tok
+        client.close()
+
+
 def test_profile_listing():
     """Profile names come from client/config*.yaml, excluding the examples."""
     import dashboard.dashboard_server as ds
@@ -412,6 +501,8 @@ if __name__ == '__main__':
     test_fastapi_endpoints()
     test_control_endpoints()
     test_status_reports_control_mode()
+    test_page_auth_wiring()
+    test_token_embedded_for_loopback()
     test_profile_listing()
     test_ws_streams_snapshots()
     test_status_feed_change_detection()

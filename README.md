@@ -35,6 +35,7 @@ sudo bash scripts/install_cli.sh
 pqvpn up                                                   # connect, wait until routing is live
 pqvpn status                                               # negotiated crypto, tunnel address, bytes
 pqvpn dashboard                                            # live web UI (no root needed)
+pqvpn dashboard --control                                  # ...and start/stop the tunnel from the page
 pqvpn down                                                 # disconnect, restore routes + DNS
 
 # 3. Live demo on one machine: netns harness → server + 3 clients → ping → iperf3 → teardown
@@ -51,15 +52,30 @@ Once a tunnel is up (`pqvpn <cmd>` is the same thing without the path):
 
 ```bash
 .venv/bin/python3 cli/vpnctl.py status                     # server + every client, ports, bytes, negotiated crypto
-pqvpn dashboard                                           # http://127.0.0.1:8080, token "demo"
-pqvpn dashboard --vps                                     # same, but for a deployed server, over SSH
+pqvpn dashboard                                           # http://127.0.0.1:8080, read-only
+pqvpn dashboard --control                                 # ...plus Connect/Disconnect buttons (prompts for sudo once)
+pqvpn dashboard --vps                                     # a deployed server, over SSH
 .venv/bin/python3 cli/vpnctl.py disconnect
 ```
 
+**`--control` lets you start and stop the tunnel from the page.** It prompts for
+sudo once at launch (bringing a tunnel up needs TUN, routes and DNS), then the
+Connect and Disconnect buttons run `pqvpn up` / `pqvpn down` for you and show
+the daemon's own output. Without it the page is read-only and the buttons render
+disabled with a line saying how to enable them.
+
+Actions are guarded by a token in an `X-PQVPN-Token` header. On a loopback bind
+the server embeds its own token in the page, so there is nothing to copy — only
+same-origin JavaScript can read it, and a cross-origin POST still arrives
+without the header and is still refused. Bind it to a non-loopback address and
+the token has to be entered by hand, because then it is the only thing guarding
+the control endpoints.
+
 The dashboard picks a free port if 8080 is taken; override with
-`pqvpn dashboard --port N --token T`. It runs unprivileged on purpose — the
-daemons' status sockets are mode 0666, so a web server never needs root here.
-`bash scripts/dashboard.sh` is the same thing and still works.
+`pqvpn dashboard --port N --token T`. Plain `pqvpn dashboard` runs unprivileged
+on purpose — the daemons' status sockets are mode 0666, so a read-only web
+server never needs root. `bash scripts/dashboard.sh` is the same thing and still
+works.
 
 ## What's implemented
 

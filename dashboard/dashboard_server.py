@@ -13,7 +13,15 @@ Run from the project root:
     .venv/bin/python3 dashboard/dashboard_server.py [--host 127.0.0.1] [--port 8080] [--token ...]
 
 Token resolution: --token, then $PQVPN_DASH_TOKEN, else a random one is
-generated at startup and printed once. It is never served by any endpoint.
+generated at startup and printed once.
+
+The token is embedded in the page itself when the server is bound to loopback,
+so a local operator never has to copy it out of the terminal. That does not
+weaken the guard: reading it requires same-origin JavaScript, and a
+cross-origin POST still arrives without the header and is still refused. On a
+non-loopback bind nothing is injected and the token must be entered by hand,
+because that is the case where it is the only thing standing between a stranger
+and the control endpoints.
 """
 import os
 import sys
@@ -28,9 +36,11 @@ from contextlib import asynccontextmanager
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
+from html import escape as html_escape
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from common.daemon_utils import ipc_request, socket_path, discover_sockets, instance_label
 
@@ -39,8 +49,12 @@ DASH_DIR = os.path.dirname(os.path.abspath(__file__))
 # Starting a tunnel needs root; viewing status does not, and the default stays
 # unprivileged on purpose (the daemons' status sockets are mode 0666).
 CONTROL = False
+# Whether this server is reachable only from this machine. Set from --host in
+# main(); gates whether the action token is embedded in the page.
+LOOPBACK = True
 POLL_INTERVAL = 0.5  # poll daemon status sockets every 0.5s -> <=1s UI updates
 TOKEN_HEADER = 'X-PQVPN-Token'
+LOOPBACK_HOSTS = ('127.0.0.1', 'localhost', '::1')
 
 
 def resolve_token(explicit: str | None = None) -> str:
@@ -267,6 +281,28 @@ async def down(x_pqvpn_token: str | None = Header(default=None)):
     return JSONResponse({'ok': ok, 'output': text}, status_code=200 if ok else 500)
 
 
+@app.get('/')
+async def index():
+    """Serve the page, embedding the action token on a loopback bind.
+
+    Registered before the StaticFiles mount below, which would otherwise serve
+    index.html at '/' untouched: routes match in registration order, so this
+    one wins and the mount still handles every other asset.
+
+    DASH_TOKEN is read per request rather than captured at import, because
+    main() overrides it from --token or $PQVPN_DASH_TOKEN after this module
+    has been imported.
+    """
+    with open(os.path.join(DASH_DIR, 'index.html'), encoding='utf-8') as fh:
+        html = fh.read()
+    if LOOPBACK:
+        tag = f'<meta name="pqvpn-token" content="{html_escape(DASH_TOKEN, quote=True)}">\n'
+        html = html.replace('<head>\n', '<head>\n' + tag, 1)
+    # No-store: the token is in the body, so a cached copy would outlive the
+    # server that issued it and 401 every action after the next restart.
+    return HTMLResponse(html, headers={'Cache-Control': 'no-store'})
+
+
 app.mount('/', StaticFiles(directory=DASH_DIR, html=True), name='static')
 
 
@@ -282,6 +318,9 @@ def main():
     args = parser.parse_args()
     DASH_TOKEN = resolve_token(args.token)
 
+    global LOOPBACK
+    LOOPBACK = args.host in LOOPBACK_HOSTS
+
     global CONTROL
     if args.control:
         if os.geteuid() != 0:
@@ -293,9 +332,11 @@ def main():
     import uvicorn
     print(f'[dashboard] serving http://{args.host}:{args.port} (status poll {POLL_INTERVAL}s)')
     print(f'[dashboard] token for actions ({TOKEN_HEADER}): {DASH_TOKEN}')
+    print('[dashboard] token is embedded in the page; nothing to copy' if LOOPBACK
+          else '[dashboard] not on loopback: paste the token into the page by hand')
     print('[dashboard] control mode: Connect/Disconnect enabled' if CONTROL
           else '[dashboard] read-only (add --control to enable Connect/Disconnect)')
-    if args.host not in ('127.0.0.1', 'localhost', '::1'):
+    if not LOOPBACK:
         print('[dashboard] WARNING: bound to a non-loopback address — status is '
               'readable by anyone who can reach it; only the token guards actions')
     uvicorn.run(app, host=args.host, port=args.port, log_level='warning')
