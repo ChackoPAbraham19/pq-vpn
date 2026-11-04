@@ -7,7 +7,7 @@ set -euo pipefail
 #   <mode>: classical | pqc
 
 MODE="${1:-unknown}"
-RESULTS_DIR="$(dirname "$0")/results"
+RESULTS_DIR="${PQVPN_RESULTS_DIR:-$(dirname "$0")/results}"
 TARGET="10.8.0.1"
 COUNT=100
 

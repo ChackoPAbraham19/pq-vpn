@@ -42,13 +42,22 @@ if [[ "$QUICK" -eq 1 ]]; then
     HS_REPS=1; RS_REPS=1
     export PQVPN_BENCH_SIZES="1K 1M 10M"
     export PQVPN_BENCH_REPS=1
-    export PQVPN_SCALING_SECS=3
+    # not shortened: 3 s runs made the throughput figures swing by 2x
+    export PQVPN_SCALING_SECS=10
+    # A smoke test must not overwrite published results. It writes a fifth of
+    # the handshake trials and three of the seven transfer sizes, so pointed at
+    # results/ it silently replaces good data with worse data -- which is
+    # exactly what happened once. Quick runs land in a temp directory instead.
+    RESULTS="$(mktemp -d)/results"
+    mkdir -p "$RESULTS"
+    QUICK_NOTE="   --quick: results in ${RESULTS} (published CSVs untouched)"
 fi
 
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo: sudo bash scripts/run_all_benchmarks.sh" >&2; exit 1; }
 [ -x "$PY" ] || { echo "missing ${PY}" >&2; exit 1; }
 
 log()  { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
+[ -n "${QUICK_NOTE:-}" ] && echo "$QUICK_NOTE"
 warn() { printf '\033[1;33m   ! %s\033[0m\n' "$*"; }
 
 STARTED_HARNESS=0
@@ -65,6 +74,7 @@ cd "$PDIR"
 mkdir -p "$RESULTS"
 export PQVPN_SKIP_DNS=1      # netns has no resolved and a write-blocked resolv.conf
 export PYTHONUNBUFFERED=1    # or daemon logs stay empty until exit
+export PQVPN_RESULTS_DIR="$RESULTS"
 
 DISK_BEFORE="$(df --output=avail / | tail -1)"
 
@@ -96,7 +106,7 @@ for mode in sys.argv[3:]:
         rows += [float(r['ms']) for r in csv.DictReader(open(f))]
     if rows:
         with open(os.path.join(out, f'handshake_{mode}.csv'), 'w', newline='') as fh:
-            w = csv.writer(fh); w.writerow(['trial_id', 'mode', 'ms'])
+            w = csv.writer(fh, lineterminator='\n'); w.writerow(['trial_id', 'mode', 'ms'])
             for i, ms in enumerate(rows, 1):
                 w.writerow([i, mode, f'{ms:.2f}'])
         print(f'   pooled handshake {mode}: n={len(rows)} median={s.median(rows):.2f}ms')
@@ -105,7 +115,7 @@ for mode in sys.argv[3:]:
         rr += [(r['kind'], float(r['ms'])) for r in csv.DictReader(open(f)) if r['ms'] != 'err']
     if rr:
         with open(os.path.join(out, f'handshake_resume_{mode}.csv'), 'w', newline='') as fh:
-            w = csv.writer(fh); w.writerow(['trial_id', 'mode', 'kind', 'ms'])
+            w = csv.writer(fh, lineterminator='\n'); w.writerow(['trial_id', 'mode', 'kind', 'ms'])
             for i, (k, ms) in enumerate(rr, 1):
                 w.writerow([i, mode, k, f'{ms:.2f}'])
         full = [m for k, m in rr if k == 'full']; res = [m for k, m in rr if k == 'resumed']
@@ -170,6 +180,14 @@ done
 ############################################################ plots
 log "4/4  Regenerating plots"
 "$PY" "${BENCH}/plot_results.py" 2>&1 | sed 's/^/   /'
+
+# Everything above ran as root, so every CSV and plot it wrote is root-owned.
+# Left that way they cannot be regenerated, edited or cleaned up without sudo,
+# and `git` sees a repo the user no longer owns. Hand them back.
+if [ -n "${SUDO_UID:-}" ]; then
+    chown -R "${SUDO_UID}:${SUDO_GID:-$SUDO_UID}" "${RESULTS}" 2>/dev/null || true
+    echo "   results handed back to uid ${SUDO_UID}"
+fi
 
 DISK_AFTER="$(df --output=avail / | tail -1)"
 log "Done"

@@ -174,7 +174,7 @@ def run_client(host, port, mode, sizes, reps, out_path):
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, 'w', newline='') as fh:
-        w = csv.DictWriter(fh, fieldnames=['mode', 'size_bytes', 'rep', 'connect_ms',
+        w = csv.DictWriter(fh, lineterminator='\n', fieldnames=['mode', 'size_bytes', 'rep', 'connect_ms',
                                            'transfer_ms', 'total_ms', 'mbps', 'sha256_ok'])
         w.writeheader()
         w.writerows(rows)

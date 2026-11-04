@@ -19,12 +19,13 @@ python3 -c "import csv,statistics as s;g={};[g.setdefault(x['kind'],[]).append(f
 
 ## Environment
 
-Handshake and resumption figures (§1, §2) were recorded **2026-09-23**; the
-netns tunnel figures (§3–§5) come from the **2026-08-26** run and have not been
-re-measured since.
+Every figure in §1–§5 and §8 comes from **one run on 2026-11-04**
+(`sudo bash scripts/run_all_benchmarks.sh`, ~9 minutes), so tables may be
+compared with each other without worrying about which day they were taken.
+§7 (real WAN) still dates from 2026-09-23: it needs the deployed VPS.
 
-- Ubuntu 24.04, Python 3.12, TUN MTU 1400. Kernel: 7.0.0-31-generic for the
-  2026-09-23 handshake runs; 6.13 for the 2026-08-26 netns runs.
+- Ubuntu 24.04, Python 3.12, TUN MTU 1400. Kernel: 7.0.0-42-generic for the
+  2026-11-04 run; 7.0.0-31-generic for the 2026-09-23 WAN figures.
 - Classical: system OpenSSL 3.0.13. PQC: custom stack at `/opt/openssl-pqc` —
   **as measured**: OpenSSL 3.4.7-dev, liboqs 0.16.0, oqs-provider 0.12.0-dev.
 - TLS 1.3, mutual auth. Classical: ECDSA P-256 + X25519.
@@ -45,8 +46,9 @@ re-measured since.
 ## Measurement variance
 
 Absolute handshake times on this host depend strongly on desktop load: across
-five identical repetitions the classical median ranged 13.9–18.1 ms and the PQC
-median 25.8–30.1 ms. **The ratio between modes is far more stable than either
+five identical repetitions of the 2026-11-04 run the classical median ranged
+14.54–18.85 ms and the PQC median 27.33–31.45 ms, and the *per-repetition*
+ratio ranged 1.64–2.16x. **The ratio between modes is far more stable than either
 absolute value**, so §1 and §2 report pooled medians across repetitions and
 state the spread. Single-run figures from this machine should not be quoted to
 two decimal places as if repeatable.
@@ -59,17 +61,17 @@ repetitions of 25 trials per mode (n = 125)**; the table pools all trials.
 
 | Mode | Median (ms) | Min (ms) | Max (ms) | Repetition medians (ms) |
 |------|-------------|----------|----------|-------------------------|
-| Classical (P-256 + X25519) | 17.22 | 11.01 | 21.52 | 15.56 – 19.06 |
-| PQC (ML-DSA-65 + X25519MLKEM768) | 31.15 | 19.47 | 36.91 | 27.63 – 31.70 |
+| Classical (P-256 + X25519) | 16.84 | 11.13 | 20.59 | 14.54 – 18.85 |
+| PQC (ML-DSA-65 + X25519MLKEM768) | 30.08 | 19.96 | 36.18 | 27.33 – 31.45 |
 
-> **Re-measured 2026-11-04** (kernel 7.0.0-42). The previous run gave 15.80 /
-> 27.98 ms for a ratio of 1.77x. Both modes are ~9–11% slower in absolute terms
-> on this busier host, and **the ratio moved by 0.04x** — which is the point the
-> variance note below makes: the ratio is the stable figure, the absolute values
-> are not. Per-repetition ratios spread wider this time (1.55–2.03x), so the
-> ratio should be read as "about 1.8x", not to two decimal places.
+> **Measured 2026-11-04** (kernel 7.0.0-42). The 2026-09-23 run gave 15.80 /
+> 27.98 ms for a ratio of 1.77x. Both modes are ~7–8% slower in absolute terms
+> on this busier host, and **the ratio moved by 0.02x** — which is the point the
+> variance note above makes: the ratio is the stable figure, the absolute values
+> are not. Per-repetition ratios span 1.64–2.16x, so the ratio should be read as
+> "about 1.8x", not to two decimal places.
 
-**PQC ≈ 1.81x slower median** (per-repetition ratios 1.55–2.03x). Cause:
+**PQC ≈ 1.79x slower median** (per-repetition ratios 1.64–2.16x). Cause:
 ML-DSA-65 certs 5577 B DER vs 386 B for ECDSA P-256, plus the larger X25519MLKEM768 key
 share. One-time cost per connection.
 
@@ -85,15 +87,15 @@ Resumption verified to skip the KEM + certificate exchange (`Reused, TLSv1.3`,
 
 | Mode | Full median (ms) | Resumed median (ms) | Speedup |
 |------|------------------|---------------------|---------|
-| Classical | 18.20 | 14.99 | 1.21x |
-| PQC | 31.43 | 27.53 | 1.14x |
+| Classical | 16.98 | 13.20 | 1.29x |
+| PQC | 28.06 | 24.34 | 1.15x |
 
-> **Re-measured 2026-11-04.** Previously 13.21 → 11.80 (1.12x) and 22.00 →
-> 20.31 (1.08x). Both modes are slower in absolute terms, consistent with §1,
-> and **both speedups improved** — resumption helps a little more on this host
-> than it did before. The full-handshake medians here now sit close to §1's
-> (18.20 vs 17.22 classical), where previously they sat well below it, because
-> the two runs were taken under similar load this time.
+> **Measured 2026-11-04.** The 2026-09-23 run gave 13.21 → 11.80 (1.12x) and
+> 22.00 → 20.31 (1.08x). Both modes are slower in absolute terms, consistent
+> with §1, and **both speedups improved**. The full-handshake medians here sit
+> close to §1's (16.98 vs 16.84 classical), where in September they sat well
+> below it — because §1 and §2 now come from the same run under the same load,
+> which is exactly what that previous gap was measuring.
 
 **§1 and §2 are separate runs; compare within a table, not across.**
 
@@ -110,11 +112,18 @@ server (`~/.pqvpn/cache/`) and resume automatically on reconnect.
 
 | Mode | Min (ms) | Avg (ms) | Max (ms) | Mdev (ms) |
 |------|----------|----------|----------|-----------|
-| Classical | 0.54 | 2.29 | 116.99 | 11.53 |
-| PQC | 0.93 | 2.33 | 119.18 | 11.75 |
+| Classical | 0.816 | 1.296 | 4.426 | 0.659 |
+| PQC | 0.693 | 1.146 | 3.275 | 0.244 |
 
-Max ≈117–119 ms occurs on the first ping only (cold tunnel); steady-state is
-1–2 ms. **PQC adds <0.1 ms — indistinguishable.**
+**PQC is 0.15 ms *faster* here — i.e. the two are indistinguishable** and the
+sign of the difference is noise. The 2026-08-26 run reported 2.29 / 2.33 ms
+average with a 117–119 ms maximum; that maximum was the first ping against a
+cold tunnel and it dragged the average up. This run does not show it, so both
+the average and the spread (mdev 0.24–0.66 vs 11.5–11.8) are much tighter.
+Steady-state latency through the tunnel is ~1 ms in both modes.
+
+These are **idle-tunnel** figures, which is the easy case. §8.2 measures the
+same ping while the tunnel is saturated.
 
 ![latency](../benchmark/results/plots/latency.png)
 
@@ -126,32 +135,70 @@ not crypto — OpenSSL runs in a separate subprocess.
 
 | Mode | Protocol | Throughput (Mbps) |
 |------|----------|-------------------|
-| Classical | TCP | 1268.47 |
-| Classical | UDP | 999.89 |
-| PQC | TCP | 532.99 |
-| PQC | UDP | 999.89 |
+| Classical | TCP | 635.15 |
+| Classical | UDP | 999.90 |
+| PQC | TCP | 635.86 |
+| PQC | UDP | 999.90 |
 
-TCP is noise-dominated by CPU scheduling on this box; UDP saturates the veth
-link in both modes. Earlier runs measured 687–693 Mbps TCP for both modes.
-**No consistent PQC data-plane penalty.**
+**The two modes agree to 0.1%** — the clearest statement yet that the data
+plane is not affected by the choice of key exchange. The 2026-08-26 run
+reported 1268 vs 533 Mbps and had to be described as "run variance"; that
+spread was real but it was scheduling noise, not a PQC effect, and this run
+removes the ambiguity. UDP saturates the veth link in both modes.
+
+The single-stream TCP figure is a *relay* ceiling, not a per-stream one —
+see §8.1, which tests that directly.
 
 ![throughput](../benchmark/results/plots/throughput.png)
 
-## 5. File Transfer (100 MB over tunnel, netns harness)
+## 5. File Transfer across sizes (netns harness)
 
-**Method:** 100 MB random file served by `http.server` on server TUN IP
-(10.8.0.1:9998), downloaded from the client namespace over the tunnel, SHA-256
-verified. One run per mode.
+**Method:** `benchmark/transfer_bench.py`. The server generates a deterministic
+byte stream on the fly; the client hashes it in flight and discards it. **Nothing
+is written to disk at either end**, and both ends compute SHA-256 over the same
+stream and compare. **Seven sizes spanning six orders of magnitude, 3
+repetitions each per mode (42 transfers per mode)**; the table reports the
+median with the min–max range.
 
-| Mode | Size (MB) | Time (s) | SHA-256 OK |
-|------|-----------|----------|------------|
-| Classical | 100 | 0.68 | yes |
-| PQC | 100 | 1.31 | yes |
+> **This replaces the earlier measurement, and the change is a correction, not
+> a refresh.** The 2026-08-26 version downloaded a real 100 MB file to disk with
+> `http.server`. At the rates measured here a disk write can be slower than the
+> tunnel, so **the old 0.68 s / 1.31 s figures were partly a filesystem
+> benchmark** and the ~2x gap between modes was never attributable to crypto.
+> Streaming also removes the free-space limit, which is why a 1 GB point is now
+> possible on a disk with 1.5 GB free.
 
-Run-to-run variance on this host is large (0.68 vs 1.31 s earlier); both are
-transfer-bound, not crypto-bound.
+| Size | Classical (Mbps) | PQC (Mbps) | PQC / classical |
+|------|------------------|------------|-----------------|
+| 1 KB | 9.7 (7.4–18.8) | 13.7 (8.3–14.6) | 1.41x |
+| 100 KB | 352.6 (263.3–356.9) | 295.3 (180.4–309.6) | 0.84x |
+| 1 MB | 425.0 (407.9–430.5) | 418.1 (414.3–480.8) | 0.98x |
+| 10 MB | 553.2 (494.0–553.4) | 548.9 (483.4–558.8) | 0.99x |
+| 100 MB | 635.1 (551.6–972.7) | 589.5 (530.8–900.2) | 0.93x |
+| 500 MB | 1085.3 (1074.6–1107.7) | 1045.5 (1036.4–1070.5) | 0.96x |
+| 1 GB | 1081.3 (1046.9–1097.8) | 1041.5 (1035.6–1043.0) | 0.96x |
 
-![file transfer](../benchmark/results/plots/file_transfer.png)
+**42 / 42 transfers per mode verified SHA-256 correct, including both 1 GB
+runs.** Throughput rises with size until it flattens at ~1.05–1.09 Gbps from
+500 MB on — the relay ceiling of §8.1, reached once the transfer is long enough
+to amortise setup.
+
+**A prediction that was written down before measuring, and did not survive.**
+The plan predicted that small transfers would be *setup*-dominated and would
+therefore make PQC look worse, with the modes converging at large sizes. The
+convergence happened (0.96–0.99x from 1 MB up). The small-size penalty did not,
+and the reason is structural rather than statistical: the per-transfer setup
+here is a plain TCP connect *inside an already-established tunnel*
+(`socket.create_connection`, median 0.70 ms classical / 0.83 ms PQC across all
+42 rows). **The TLS handshake is not in this measurement loop at all** — it is
+paid once, when the tunnel comes up, and §1 is where it shows. So no
+PQC-specific small-transfer penalty was ever possible here, and the 1 KB column
+is measuring scheduling jitter: its min–max ranges (7.4–18.8 vs 8.3–14.6 Mbps)
+overlap almost completely, and an earlier run of the same benchmark put
+classical ahead at that size by a similar margin. **The 1 KB row should not be
+read as a result in either direction.**
+
+![transfer sweep](../benchmark/results/plots/transfer_sweep.png)
 
 ## 6. Internet egress through the tunnel (netns harness)
 
@@ -235,6 +282,76 @@ ticket and the server returns another one. Resumption drops the certificates
 but not the bulk. It is the most effective optimisation available here, not a
 fix.
 
+## 8. Scaling and behaviour under load (netns harness)
+
+**Method:** `benchmark/run_scaling_bench.sh <mode>`, run from the host so it can
+drive several client namespaces at once. 10 s per data point. Three questions
+the rest of the suite does not answer.
+
+### 8.1 Is the throughput ceiling per-stream, or the relay?
+
+`iperf3 -P 1,2,4,8` from one client.
+
+| Parallel streams | Classical (Mbps) | PQC (Mbps) |
+|------------------|------------------|------------|
+| 1 | 758.73 | 700.96 |
+| 2 | 965.22 | 999.80 |
+| 4 | 995.30 | 996.99 |
+| 8 | 1009.87 | 967.96 |
+
+**It is the relay.** Two streams reach ~1 Gbps and four and eight add nothing;
+if the ceiling were per-stream, the total would keep climbing. The project's
+stated limitation — that throughput is bounded by the Python `select` relay
+rather than by OpenSSL — was asserted in earlier revisions of this document and
+is now measured. It is also why §4's single-stream figure (~635 Mbps) sits below
+the §5 large-transfer figure (~1.08 Gbps): neither is wrong, they are a
+single-stream and a saturating measurement of the same ceiling.
+
+### 8.2 What happens to latency when the tunnel is saturated?
+
+Ping from the same namespace as the load, so it queues behind the same traffic.
+
+| Mode | Idle (ms) | Under load (ms) | Degradation |
+|------|-----------|-----------------|-------------|
+| Classical | 1.210 | 17.203 | 14x |
+| PQC | 1.086 | 30.574 | 28x |
+
+**Latency degrades by more than an order of magnitude under saturation.** This
+is the honest counterpart to §3: an idle tunnel at ~1 ms says little about a
+tunnel in use. The mechanism is queueing in the single-threaded relay — a ping
+waits behind whatever bulk traffic is already buffered — and it is a real
+usability limit, not a measurement artefact.
+
+The classical/PQC gap in this table (17 vs 31 ms) is **not** evidence of a
+crypto cost: it is one 10-second sample per mode with no repetitions, and every
+other data-plane measurement here shows the two modes within 1%. Treat it as
+"both degrade sharply", and read the per-mode difference as unmeasured.
+
+### 8.3 Does the server scale across clients?
+
+Total throughput with 1, 2 and 3 clients transferring at once. Each client gets
+its own `iperf3` server on its own port, so the load is genuinely concurrent
+rather than three tests taking turns.
+
+| Concurrent clients | Classical (Mbps total) | PQC (Mbps total) |
+|--------------------|------------------------|------------------|
+| 1 | 714.72 | 737.07 |
+| 2 | 670.03 | 669.67 |
+| 3 | 458.73 | 455.49 |
+
+**Total throughput falls as clients are added.** Three clients together move
+~36% less data than one client alone — the design does not merely fail to scale,
+it degrades. The cause is the architecture this benchmark was written to test:
+`server/vpn_server.py` demultiplexes every client's return traffic through **one
+shared TUN reader** in a single `select` loop, so each additional client adds
+contention to a resource that was already the bottleneck in §8.1.
+
+Both modes track each other to within 3%, which again isolates this from the
+crypto: it is a relay-architecture result, and the fix is the compiled,
+multi-queue relay listed under Future Work.
+
+![scaling](../benchmark/results/plots/scaling.png)
+
 ## Validation
 
 `bash scripts/demo.sh --dry-run` runs five suites — **193 checks**:
@@ -253,16 +370,17 @@ fix.
 |--------|-----------------|---------|
 | WAN full handshake | 1.61x (+124 ms) | About one extra round trip, not CPU — the real deployment cost |
 | WAN resumed handshake | saves 72 ms (1.36x) | Helps far more than loopback showed, but PQC stays ~47 ms behind |
-| Full handshake | 1.77x slower | Only PQC cost; once per connection/reconnect |
-| Resumed handshake | 1.08x vs 1.12x | Resume minimizes even this; saves WAN RTT |
-| Ping latency | +0.04 ms | Negligible |
-| TCP / UDP throughput | noise / 0% | No data-plane penalty |
-| 100 MB transfer | ~2x run variance | Not crypto-bound |
+| Full handshake | 1.79x slower | Only PQC cost; once per connection/reconnect |
+| Resumed handshake | 1.15x vs 1.29x | Resume minimizes even this; saves WAN RTT |
+| Ping latency (idle) | −0.15 ms | Indistinguishable; sign is noise |
+| TCP / UDP throughput | 1.001x / 1.000x | No data-plane penalty, to 0.1% |
+| Transfer, 1 MB – 1 GB | 0.93–0.99x | Not crypto-bound |
+| Parallel streams, clients | within 3% | Relay-bound in both modes |
 
 Key takeaways:
 
 1. **PQC is practical for VPNs.** The cost is confined to the one-time
-   handshake — 1.77x on loopback (CPU) and 1.61x over a real WAN, where it
+   handshake — 1.79x on loopback (CPU) and 1.61x over a real WAN, where it
    takes the form of about one extra round trip. What causes that round trip is
    not established (§7): the PQC flight does exceed the initial congestion
    window, which is consistent with it, but no packet capture confirms the
@@ -271,9 +389,16 @@ Key takeaways:
 2. **Steady-state data plane is identical** — both modes use AES-256-GCM; PQC
    only affects the initial key exchange.
 3. **Throughput is bounded by the Python relay** (`select` + `read`/`write`),
-   not by OpenSSL subprocesses. Removing this ceiling requires a compiled relay
-   (Tier 3 — see Future Work).
-4. **Custom OpenSSL ≥ 3.2 is mandatory** for ML-DSA certs; system OpenSSL 3.0.x
+   not by OpenSSL subprocesses — measured directly in §8.1: two parallel streams
+   saturate the ceiling and four or eight add nothing. Removing it requires a
+   compiled relay (Tier 3 — see Future Work).
+4. **The relay architecture, not the cryptography, is this project's real
+   limitation.** Latency degrades 14–28x under saturation (§8.2) and total
+   throughput *falls* as clients are added (§8.3). Both follow from the single
+   shared TUN reader, both are mode-independent, and neither would have been
+   visible from the idle-tunnel and single-client numbers the suite used to
+   report. This is the most significant negative result in the project.
+5. **Custom OpenSSL ≥ 3.2 is mandatory** for ML-DSA certs; system OpenSSL 3.0.x
    cannot load OID-based signature algorithms.
 
 ## Future Work (explicitly out of current scope)
@@ -284,8 +409,11 @@ Key takeaways:
 - **Production auth:** PAM / directory-backed accounts. (Per-client certificates
   with CRL revocation and welcome-port rate limiting are implemented; MTU
   auto-negotiation is not.)
-- **Multi-client scaling** beyond 3 (IP pool, per-client port range) and
-  per-client bandwidth QoS.
+- **Multi-client scaling.** §8.3 shows total throughput *falling* from 715 to
+  459 Mbps between 1 and 3 clients, so the open item is no longer "measure it"
+  but "fix it": the single shared TUN reader needs to become per-client queues
+  or a multi-queue TUN before an IP pool beyond 3 clients is worth building.
+  Per-client bandwidth QoS is also unimplemented.
 - **Live WAN numbers:** handshake and resumption are measured (§7). Still open:
   WAN latency/throughput through the tunnel itself, and whether a smaller
   certificate chain (ML-DSA-44, or a hybrid with a compressed chain) removes
@@ -294,6 +422,24 @@ Key takeaways:
   renegotiation); reconnect + resume is the workaround.
 
 ## Reproducing
+
+Everything in §1–§5 and §8 regenerates with one command, which builds the netns
+harness, runs both modes against a live tunnel, tears the harness down on every
+exit path, regenerates the plots and hands the files back to your own user:
+
+```bash
+sudo bash scripts/run_all_benchmarks.sh            # full sweep, ~9 minutes
+sudo bash scripts/run_all_benchmarks.sh --mode pqc # one mode only
+sudo bash scripts/run_all_benchmarks.sh --quick    # smoke test, see note
+```
+
+> `--quick` writes to a **temporary directory**, not `benchmark/results/`, and
+> prints the path. It runs a fifth of the handshake trials and three of the
+> seven transfer sizes, so pointing it at the published CSVs would silently
+> replace good data with worse data — which is exactly what happened once, and
+> cost a full sweep.
+
+The individual benchmarks, if you want to run one on its own:
 
 ```bash
 cd /home/chacko/Chacko/VPN
@@ -309,6 +455,10 @@ cd /home/chacko/Chacko/VPN
 #   client ns:  sudo ip netns exec vpn_ns2 bash benchmark/run_latency_bench.sh <mode>
 #               sudo ip netns exec vpn_ns2 bash benchmark/run_throughput_bench.sh <mode>
 #               sudo ip netns exec vpn_ns2 bash benchmark/run_file_transfer_bench.sh <mode>
+#   host:       sudo bash benchmark/run_scaling_bench.sh <mode>
+#
+# Transfer sizes and repetitions are overridable:
+#   PQVPN_BENCH_SIZES="1K 1M 100M" PQVPN_BENCH_REPS=3 ...
 
 # Regenerate all plots:
 .venv/bin/python3 benchmark/plot_results.py

@@ -1,0 +1,10 @@
+test,variant,value,unit
+parallel_streams,1,758.73,mbps
+parallel_streams,2,965.22,mbps
+parallel_streams,4,995.3,mbps
+parallel_streams,8,1009.87,mbps
+latency,idle,1.210,ms
+latency,under_load,17.203,ms
+clients,1,714.72,mbps
+clients,2,670.03,mbps
+clients,3,458.73,mbps

@@ -228,7 +228,7 @@ def _plot_transfer_sweep(by_mode: dict):
     ax1.set_title('Sustained rate rises until the relay caps it')
     ax2.set_yscale('log')
     ax2.set_ylabel('Total time (ms)')
-    ax2.set_title('Small transfers are dominated by setup')
+    ax2.set_title('Below ~100 KB, fixed per-transfer cost dominates')
     fig.suptitle('Transfer through the tunnel, by size (median, min-max band)',
                  fontweight='bold')
     plt.tight_layout()
@@ -262,9 +262,11 @@ def _plot_scaling(by_mode: dict):
         plt.close(fig)
         return
     ax1.set_xlabel('Parallel TCP streams')
-    ax1.set_title('If the ceiling were per-stream, this would rise')
+    ax1.set_title('Two streams saturate the relay; more does not help')
+    ax1.set_xticks([1, 2, 4, 8])
     ax2.set_xlabel('Concurrent clients')
-    ax2.set_title('One shared TUN reader serves all of them')
+    ax2.set_title('Total throughput FALLS as clients are added')
+    ax2.set_xticks([1, 2, 3])
     for ax in (ax1, ax2):
         ax.set_ylabel('Total throughput (Mbps)')
         ax.set_ylim(bottom=0)

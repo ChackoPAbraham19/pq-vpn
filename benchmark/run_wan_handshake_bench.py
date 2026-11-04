@@ -153,7 +153,7 @@ def _resume_trials(target, host, mode, trials, port, out_dir,
 
     path = os.path.join(out_dir, f'wan_handshake_resume_{mode}.csv')
     with open(path, 'w', newline='') as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator='\n')
         w.writerow(['trial_id', 'mode', 'kind', 'ms'])
         w.writerows(rows)
 
@@ -203,7 +203,7 @@ def run_mode(target: str, host: str, mode: str, trials: int, port: int,
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f'wan_handshake_{mode}.csv')
     with open(path, 'w', newline='') as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator='\n')
         w.writerow(['trial_id', 'mode', 'ms'])
         w.writerows(rows)
 

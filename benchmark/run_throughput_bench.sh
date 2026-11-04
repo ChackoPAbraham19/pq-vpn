@@ -8,7 +8,7 @@ set -euo pipefail
 #   TERMINAL 2 (client ns): sudo ip netns exec vpn_ns2 bash benchmark/run_throughput_bench.sh <mode>
 
 MODE="${1:-unknown}"
-RESULTS_DIR="$(dirname "$0")/results"
+RESULTS_DIR="${PQVPN_RESULTS_DIR:-$(dirname "$0")/results}"
 SERVER_IP="10.8.0.1"
 DURATION=10
 

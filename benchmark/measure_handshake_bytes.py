@@ -216,7 +216,7 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     out = os.path.join(args.out_dir, 'handshake_bytes.csv')
     with open(out, 'w', newline='') as fh:
-        w = csv.DictWriter(fh, fieldnames=['mode', 'phase', 'direction',
+        w = csv.DictWriter(fh, lineterminator='\n', fieldnames=['mode', 'phase', 'direction',
                                            'message', 'bytes'])
         w.writeheader()
         w.writerows(rows)

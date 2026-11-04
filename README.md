@@ -119,25 +119,42 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
 a single self-contained write-up of the whole project — design, implementation,
 results and findings — is in [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md).
 
-## Benchmarks (25 trials per mode, loopback + netns)
+## Benchmarks
+
+Everything below except the WAN rows comes from **one run on 2026-11-04**
+(`sudo bash scripts/run_all_benchmarks.sh`), so the tables are comparable with
+each other.
 
 | Metric | Classical | PQC | Overhead |
 |--------|-----------|-----|----------|
-| **TLS handshake** (median, n=125) | 17.2 ms | 31.2 ms | 1.81× |
-| **Resumed handshake** (median, n=60) | 15.0 ms | 27.5 ms | 1.14–1.21× vs full |
-| **Ping RTT through tunnel** | 2.29 ms | 2.33 ms | 1.7 % |
-| **TCP throughput** (iperf3) | 1268 Mbps | 533 Mbps | run variance |
+| **TLS handshake** (median, n=125) | 16.8 ms | 30.1 ms | 1.79× |
+| **Resumed handshake** (median, n=60) | 13.2 ms | 24.3 ms | 1.15–1.29× vs full |
+| **Ping RTT through tunnel** (idle) | 1.30 ms | 1.15 ms | none measurable |
+| **TCP throughput** (iperf3, 1 stream) | 635.2 Mbps | 635.9 Mbps | 0.1 % |
 | **UDP throughput** | 999.9 Mbps | 999.9 Mbps | 0 % |
-| **100 MB file transfer** | 0.68 s | 1.31 s | run variance |
+| **Bulk transfer, 1 GB** | 1081 Mbps | 1042 Mbps | 3.6 % |
 | **Handshake over real WAN** (Mumbai VPS) | 203 ms | 327 ms | 1.61× (+124 ms) |
 | **…resumed** | 152.9 ms | 200.0 ms | saves 72 ms |
 
-Larger certificates and key shares make the one-time handshake slower; the data plane
-is unaffected (throughput is bounded by the Python relay, not the crypto). Live
-3-client run: ~1 ms ping, 0.5–1 Gbps per client concurrently. Absolute handshake times
-on this desktop vary with load — the **ratio** between modes is the stable result, so
-the figures above pool several repetitions and `docs/BENCHMARKS.md` states the spread.
-Methodology, raw CSVs and plots: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+Larger certificates and key shares make the one-time handshake slower; **the data
+plane is unaffected** — TCP throughput now matches to 0.1 %, and the transfer sweep
+(1 KB → 1 GB, 42 transfers per mode, all SHA-256 verified) puts the two modes within
+1–4 % everywhere above 1 MB.
+
+The limits that *do* bite are architectural, not cryptographic, and both were
+measured for the first time in this run:
+
+- **Latency collapses under load** — 1.2 ms idle → 17–31 ms while the tunnel is
+  saturated.
+- **Throughput falls as clients are added** — 715 → 670 → 459 Mbps total for 1, 2
+  and 3 concurrent clients. The server demultiplexes every client through one shared
+  TUN reader, and that is the bottleneck.
+
+Two parallel streams saturate the relay at ~1 Gbps and four or eight add nothing,
+confirming the ceiling is the Python relay rather than OpenSSL. Absolute handshake
+times on this desktop vary with load — the **ratio** between modes is the stable
+result, so the figures above pool several repetitions and `docs/BENCHMARKS.md` states
+the spread. Methodology, raw CSVs and plots: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## Project structure
 
@@ -158,8 +175,12 @@ VPN/
 
 ## Limitations (honest list)
 
-- **Python prototype**: throughput tops out around 0.5–1.3 Gbps per client because of
-  the Python relay and pipe copies, not the crypto.
+- **Python prototype**: throughput tops out around 1 Gbps because of the Python relay
+  and pipe copies, not the crypto — two parallel streams saturate it and more add
+  nothing.
+- **Degrades under load and with clients**: latency goes from ~1.2 ms idle to 17–31 ms
+  saturated, and *total* throughput falls from 715 to 459 Mbps as clients go 1 → 3.
+  One shared TUN reader serves every client.
 - **Session resumption is per-server-process**: each client gets a fresh `s_server`,
   which regenerates ticket keys, so tickets resume within a benchmark but not across
   daemon restarts. Status reports `resumed` only on hard evidence.

@@ -144,7 +144,7 @@ def run_benchmark(mode: str, config_dir: str | None = None, trials: int = 20,
     os.makedirs(out_dir, exist_ok=True)
     csv_path = os.path.join(out_dir, f'handshake_{mode}.csv')
     with open(csv_path, 'w', newline='') as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator='\n')
         w.writerow(['trial_id', 'mode', 'ms'])
         for trial, elapsed in results:
             w.writerow([trial, mode, round(elapsed, 2)])
@@ -223,7 +223,7 @@ def run_resumption_benchmark(mode: str, config_dir: str | None = None,
     os.makedirs(out_dir, exist_ok=True)
     csv_path = os.path.join(out_dir, f'handshake_resume_{mode}.csv')
     with open(csv_path, 'w', newline='') as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator='\n')
         w.writerow(['trial_id', 'mode', 'kind', 'ms'])
         for trial, kind, ms in results:
             w.writerow([trial, mode, kind, ms])

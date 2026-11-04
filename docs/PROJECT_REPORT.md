@@ -390,10 +390,16 @@ and full internet egress through the tunnel.
 
 ### Measurement environment
 
-Ubuntu 24.04, Python 3.12, tunnel MTU 1400. Handshake measurements over
-loopback; tunnel latency, throughput and file transfer inside the network
-namespace harness; real-WAN measurements from a laptop in India to an AWS
-Lightsail instance in `ap-south-1` (Mumbai). Classical mode uses the system
+Ubuntu 24.04 (kernel 7.0.0-42), Python 3.12, tunnel MTU 1400. Handshake
+measurements over loopback; tunnel latency, throughput, transfer and scaling
+inside the network namespace harness; real-WAN measurements from a laptop in
+India to an AWS Lightsail instance in `ap-south-1` (Mumbai).
+
+**Everything in §12.1–§12.5 and §12.8 comes from a single run on 2026-11-04**
+(`sudo bash scripts/run_all_benchmarks.sh`, about nine minutes), so those tables
+may be compared with one another — which earlier revisions of this report had to
+warn against, because the figures were stitched together from three different
+days. Only the WAN results (§12.6) are from a separate, earlier session. Classical mode uses the system
 OpenSSL 3.0.13; PQC mode used OpenSSL 3.4.7-dev with liboqs 0.16.0 and
 oqs-provider 0.12.0-dev.
 
@@ -407,7 +413,8 @@ expected to move, since both modes traverse identical code paths.
 
 **A note on variance.** The measurement host is an interactive desktop, not a
 quiet benchmark machine. Across five identical repetitions the classical median
-ranged 15.6–19.1 ms and the PQC median 27.6–31.7 ms. **The ratio between modes
+ranged 14.5–18.9 ms and the PQC median 27.3–31.5 ms, and the *per-repetition*
+ratio ranged 1.64–2.16x. **The ratio between modes
 is far more stable than either absolute value**, so the tables below pool
 repetitions and state the spread. Single-run figures from this host should not
 be quoted to two decimal places as if repeatable.
@@ -416,10 +423,10 @@ be quoted to two decimal places as if repeatable.
 
 | Mode | Median (ms) | Min (ms) | Max (ms) | Repetition medians (ms) |
 |------|-------------|----------|----------|-------------------------|
-| Classical (P-256 + X25519) | 17.22 | 11.01 | 21.52 | 15.56 – 19.06 |
-| PQC (ML-DSA-65 + X25519MLKEM768) | 31.15 | 19.47 | 36.91 | 27.63 – 31.70 |
+| Classical (P-256 + X25519) | 16.84 | 11.13 | 20.59 | 14.54 – 18.85 |
+| PQC (ML-DSA-65 + X25519MLKEM768) | 30.08 | 19.96 | 36.18 | 27.33 – 31.45 |
 
-PQC is **1.81x** slower (per-repetition ratios 1.55–2.03x). Cause: size. An
+PQC is **1.79x** slower (per-repetition ratios 1.64–2.16x). Cause: size. An
 ML-DSA-65 certificate is 5577 bytes DER against 386 for ECDSA P-256, its
 signature is 3309 bytes against about 72, and the X25519MLKEM768 key share is
 1222 bytes against 32. Measured message by message in §13.1.
@@ -428,46 +435,94 @@ signature is 3309 bytes against about 72, and the X25519MLKEM768 key share is
 
 | Mode | Full median (ms) | Resumed median (ms) | Speedup |
 |------|------------------|---------------------|---------|
-| Classical | 18.20 | 14.99 | 1.21x |
-| PQC | 31.43 | 27.53 | 1.14x |
+| Classical | 16.98 | 13.20 | 1.29x |
+| PQC | 28.06 | 24.34 | 1.15x |
 
-These absolute values sit below §12.1 because the host was quieter during these
-repetitions — the two sets are separate runs and should be compared within a
-table, not across.
+The full-handshake medians here now agree closely with §12.1 (16.98 vs 16.84
+classical). In earlier revisions they diverged, and the report had to explain
+the gap as differing host load; both tables now come from the same run, which
+removes the explanation along with the gap.
 
 ### 12.3 Tunnel ping latency (100 pings, namespace harness)
 
 | Mode | Min (ms) | Avg (ms) | Max (ms) | Mdev (ms) |
 |------|----------|----------|----------|-----------|
-| Classical | 0.54 | 2.29 | 116.99 | 11.53 |
-| PQC | 0.93 | 2.33 | 119.18 | 11.75 |
+| Classical | 0.816 | 1.296 | 4.426 | 0.659 |
+| PQC | 0.693 | 1.146 | 3.275 | 0.244 |
 
-A difference of **0.04 ms** in the mean — indistinguishable. The maxima occur on
-the first (cold) ping only; steady state is 1–2 ms.
+A difference of **0.15 ms** in the mean, with PQC nominally *ahead* — which is
+the clearest way of saying the two are indistinguishable, since no mechanism
+would make post-quantum key exchange reduce steady-state ping. Earlier runs
+reported means near 2.3 ms with maxima of 117–119 ms; those maxima were the
+first ping against a cold tunnel and they dominated the mean. This run does not
+reproduce them, and the spread is correspondingly tighter (mdev 0.24–0.66 ms
+against 11.5–11.8 ms).
+
+This is an **idle** tunnel. §12.8 measures the same ping under saturation, where
+the picture is very different.
 
 ### 12.4 Throughput (iperf3, 10 s, namespace harness)
 
 | Mode | Protocol | Throughput (Mbps) |
 |------|----------|-------------------|
-| Classical | TCP | 1268.47 |
-| Classical | UDP | 999.89 |
-| PQC | TCP | 532.99 |
-| PQC | UDP | 999.89 |
+| Classical | TCP | 635.15 |
+| Classical | UDP | 999.90 |
+| PQC | TCP | 635.86 |
+| PQC | UDP | 999.90 |
 
-UDP saturates the link identically in both modes. The single TCP pair is
-dominated by CPU scheduling variance on this host — earlier runs measured
-687–693 Mbps for *both* modes — so it is **not** evidence of a cryptographic
-throughput difference.
+**The two modes agree to within 0.1%.** Earlier revisions reported 1268 against
+533 Mbps and had to argue that the 2.4x gap was scheduling variance rather than
+a cryptographic effect; that argument was correct but it rested on asking the
+reader to discount the headline number. This run makes the argument unnecessary.
 
-### 12.5 File transfer (100 MB over the tunnel)
+The single-stream TCP figure is a property of the relay, not of the stream:
+§12.8 shows two parallel streams reaching about 1 Gbps.
 
-| Mode | Size (MB) | Time (s) | SHA-256 |
-|------|-----------|----------|---------|
-| Classical | 100 | 0.68 | pass |
-| PQC | 100 | 1.31 | pass |
+### 12.5 File transfer across sizes (namespace harness)
 
-Both transfers verify byte-for-byte. Run-to-run variance on this host is large;
-the workload is relay-bound, not crypto-bound.
+The server generates a deterministic byte stream on demand; the client hashes it
+in flight and discards it. Nothing is written to disk at either end, and both
+ends compute SHA-256 over the same stream and compare. Seven sizes, three
+repetitions each per mode — 42 transfers per mode — reported as median with the
+min–max range.
+
+**This replaces the previous measurement, and it is a correction rather than a
+refresh.** The earlier version downloaded a real 100 MB file to disk using
+`http.server`. At the rates involved a disk write can be slower than the tunnel,
+so the published 0.68 s and 1.31 s figures were partly a filesystem benchmark,
+and the roughly 2x gap between modes was never safely attributable to anything
+in the VPN. Streaming also removes the free-space constraint, which is what
+makes a 1 GB measurement possible on a host with 1.5 GB free.
+
+| Size | Classical (Mbps) | PQC (Mbps) | PQC / classical |
+|------|------------------|------------|-----------------|
+| 1 KB | 9.7 (7.4–18.8) | 13.7 (8.3–14.6) | 1.41x |
+| 100 KB | 352.6 (263.3–356.9) | 295.3 (180.4–309.6) | 0.84x |
+| 1 MB | 425.0 (407.9–430.5) | 418.1 (414.3–480.8) | 0.98x |
+| 10 MB | 553.2 (494.0–553.4) | 548.9 (483.4–558.8) | 0.99x |
+| 100 MB | 635.1 (551.6–972.7) | 589.5 (530.8–900.2) | 0.93x |
+| 500 MB | 1085.3 (1074.6–1107.7) | 1045.5 (1036.4–1070.5) | 0.96x |
+| 1 GB | 1081.3 (1046.9–1097.8) | 1041.5 (1035.6–1043.0) | 0.96x |
+
+All 42 transfers per mode verified SHA-256 correct, including both 1 GB runs.
+Throughput climbs with size and flattens near 1.05–1.09 Gbps from 500 MB
+onwards, which is the relay ceiling of §12.8 reached once the transfer is long
+enough to amortise setup.
+
+**A prediction recorded before the measurement, which the measurement refuted.**
+The sweep was designed around a stated expectation: that small transfers would
+be setup-dominated and would therefore make PQC look worse, with the two modes
+converging at large sizes. The convergence held — 0.96x to 0.99x from 1 MB
+upwards. The small-size penalty did not appear, and the reason is structural
+rather than statistical. The per-transfer setup in this harness is a plain TCP
+connect *inside an already-established tunnel* (`socket.create_connection`,
+median 0.70 ms classical against 0.83 ms PQC across all 42 rows). The TLS
+handshake is not inside this measurement loop at all: it is paid once, when the
+tunnel comes up, and §12.1 is where it appears. No PQC-specific small-transfer
+penalty was therefore possible here, and the 1 KB row is measuring scheduler
+jitter — its min–max ranges overlap almost entirely, and an earlier run of the
+same benchmark placed classical ahead at that size by a comparable margin. **The
+1 KB row should not be read as a result in either direction.**
 
 ### 12.6 Real-WAN handshake (laptop to Mumbai VPS)
 
@@ -479,7 +534,7 @@ Full handshake, 25 trials per mode, TCP round-trip measured at 99.2 ms:
 | PQC | 327.0 | 202.4 | 668.2 |
 
 PQC is **1.61x** slower over the WAN, i.e. **+124 ms** — a smaller *ratio* than
-loopback's 1.77x but a far larger absolute cost. §13 explains why.
+loopback's 1.79x but a far larger absolute cost. §13 explains why.
 
 Full versus resumed, 20 trials per mode, round-trip 51.6 ms during this later
 run:
@@ -496,22 +551,78 @@ IP as seen by an external service becomes the server's address,
 `https://www.google.com` returns HTTP 200 in 0.43 s through the tunnel, and
 `dig @10.8.0.1 github.com` resolves in 52 ms via the server's `dnsmasq`.
 
+### 12.8 Scaling and behaviour under load
+
+Three questions the rest of the suite does not answer, measured with
+`benchmark/run_scaling_bench.sh` at 10 s per data point.
+
+**Is the throughput ceiling per-stream or per-relay?** `iperf3 -P 1,2,4,8` from
+one client:
+
+| Parallel streams | Classical (Mbps) | PQC (Mbps) |
+|------------------|------------------|------------|
+| 1 | 758.73 | 700.96 |
+| 2 | 965.22 | 999.80 |
+| 4 | 995.30 | 996.99 |
+| 8 | 1009.87 | 967.96 |
+
+It is the relay. Two streams reach roughly 1 Gbps; four and eight add nothing.
+Had the ceiling been per-stream the total would have continued to climb. §15
+previously asserted this limitation; it is now measured.
+
+**What happens to latency when the tunnel is saturated?** Ping from the same
+namespace as the load, so it queues behind the same traffic:
+
+| Mode | Idle (ms) | Under load (ms) | Degradation |
+|------|-----------|-----------------|-------------|
+| Classical | 1.210 | 17.203 | 14x |
+| PQC | 1.086 | 30.574 | 28x |
+
+Latency degrades by more than an order of magnitude. This is the honest
+counterpart to §12.3: an idle tunnel at about 1 ms says little about a tunnel in
+use. The mechanism is queueing inside the single-threaded relay — a ping waits
+behind whatever bulk traffic is already buffered. The difference between the two
+modes in this table is **not** evidence of a cryptographic cost: it is one 10 s
+sample per mode with no repetitions, while every other data-plane measurement
+here puts the modes within 1%. The finding is that both degrade sharply; the
+per-mode difference is unmeasured.
+
+**Does the server scale across clients?** Total throughput with one, two and
+three clients transferring simultaneously, each against its own `iperf3` server
+on its own port so that the load is genuinely concurrent:
+
+| Concurrent clients | Classical (Mbps total) | PQC (Mbps total) |
+|--------------------|------------------------|------------------|
+| 1 | 714.72 | 737.07 |
+| 2 | 670.03 | 669.67 |
+| 3 | 458.73 | 455.49 |
+
+**Total throughput falls as clients are added.** Three clients together move
+about 36% less data than one client alone: the design does not merely fail to
+scale, it degrades. The cause is the architecture this benchmark was written to
+test. `server/vpn_server.py` demultiplexes every client's return traffic through
+a single shared TUN reader inside one `select` loop, so each additional client
+contends for a resource that was already the bottleneck in the parallel-stream
+table above. Both modes track each other to within 3%, which isolates the result
+from the cryptography: it is a relay-architecture finding, and the remedy is the
+compiled multi-queue relay listed in §16.
+
 ---
 
 ## 13. Key finding — the post-quantum penalty is a round trip, not CPU
 
 The expectation going into the WAN measurement was that network latency would
-*dilute* the post-quantum overhead: if PQC costs 12 ms of extra computation on
+*dilute* the post-quantum overhead: if PQC costs 13 ms of extra computation on
 loopback, that should vanish against a 99 ms round trip. **The measurement shows
 the opposite.**
 
 - Classical: **203 ms**, almost exactly two round trips (TCP connect, then the
   TLS 1.3 handshake) — textbook behaviour.
 - PQC: **327 ms**, roughly 3.3 round trips — **+124 ms**, an order of magnitude
-  more than the +12 ms seen on loopback.
+  more than the +13 ms seen on loopback.
 
 The extra time is not compute: the whole computational difference measured on
-loopback is 12 ms. To find out what the handshake is actually doing, every
+loopback is 13 ms (§12.1). To find out what the handshake is actually doing, every
 message was captured with `openssl s_client -msg` in both modes — full and
 resumed — by `benchmark/measure_handshake_bytes.py`
 (`benchmark/results/handshake_bytes.csv`). Message sizes are properties of the
@@ -587,7 +698,7 @@ Other candidates remain open, and more than one may contribute:
 The resumption result points the same way — at 51.6 ms RTT resumption saved
 72 ms for PQC against 46 ms for classical — but it is a strong hint rather than
 proof. If certificate size alone bought a whole round trip, a resumed handshake
-should have closed the gap to roughly the CPU difference (~10 ms). It did not:
+should have closed the gap to roughly the CPU difference (~13 ms). It did not:
 PQC stays 47 ms (~0.9 RTT) slower than classical even resumed, and only about
 26 ms of the full-handshake gap disappeared. The byte counts above say why —
 resumption removes the certificates but not the ticket.
@@ -632,10 +743,20 @@ different signal than the obvious one.
 
 Stated plainly, because knowing where a system stops is part of describing it.
 
-- **Throughput is bounded by the Python relay**, not by cryptography. Each
-  packet crosses a pipe and a Python loop, giving roughly 0.5–1.3 Gbps per
-  client. OpenSSL does the cryptography in a separate process and is not the
-  bottleneck.
+- **Throughput is bounded by the Python relay**, not by cryptography, and this
+  is now measured rather than argued (§12.8): two parallel streams saturate the
+  relay at about 1 Gbps and four or eight add nothing. A single stream gets
+  roughly 635 Mbps and a long bulk transfer about 1.08 Gbps. OpenSSL does the
+  cryptography in a separate process and is not the bottleneck.
+- **Latency collapses under load.** The tunnel holds about 1.2 ms idle and
+  17–31 ms while saturated, a degradation of 14–28x (§12.8). Traffic queues
+  inside the single-threaded relay, so an interactive session sharing the tunnel
+  with a bulk transfer will feel it.
+- **The server does not scale across clients — it degrades.** Total throughput
+  falls from about 715 Mbps with one client to 459 Mbps with three (§12.8),
+  because every client's return traffic is demultiplexed through one shared TUN
+  reader. This is the most serious limitation in the list: adding clients makes
+  the system worse, not merely no better.
 - **Session resumption is per-server-process.** Every client session gets a
   fresh `s_server`, which generates fresh ticket-encryption keys, so a ticket
   cached from a previous server lifetime never resumes. This cannot be fixed
@@ -653,9 +774,10 @@ Stated plainly, because knowing where a system stops is part of describing it.
 - **The welcome port is unauthenticated** by design. Cost is bounded by a 10 s
   reap and a per-source rate limit, but a distributed flood could still occupy
   the slots.
-- **Tunnel latency, throughput and file transfer were measured in the namespace
-  harness**, not over the WAN. Only handshake and resumption have real-internet
-  numbers.
+- **Tunnel latency, throughput, transfer and scaling were measured in the
+  namespace harness**, not over the WAN. Only handshake and resumption have
+  real-internet numbers, so every figure above describes a tunnel with no
+  propagation delay and no packet loss — favourable conditions.
 
 ---
 
@@ -713,6 +835,22 @@ Raw per-trial data is committed under `benchmark/results/`, so every table in
 
 ```bash
 python3 -c "import csv,statistics as s;r=[float(x['ms']) for x in csv.DictReader(open('benchmark/results/handshake_classical.csv'))];print(round(s.median(r),2),len(r))"
+```
+
+The transfer sweep (§12.5) and the scaling tables (§12.8) recompute the same
+way, from `file_transfer_<mode>.csv` and `scaling_<mode>.csv`. Every row of the
+transfer CSV carries its own `sha256_ok` flag, so the integrity claim is checked
+rather than taken on trust:
+
+```bash
+awk -F, 'NR>1{n++;if($8=="yes")ok++}END{print ok"/"n" verified"}' benchmark/results/file_transfer_pqc.csv
+```
+
+To regenerate all of §12 rather than recompute it — harness up, both modes,
+teardown, plots — one command does it:
+
+```bash
+sudo bash scripts/run_all_benchmarks.sh
 ```
 
 The message sizes in §13 are reproducible the same way — the script reprints the

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 # run_scaling_bench.sh — the three questions the other benchmarks do not answer.
 #
 # Usage: sudo bash benchmark/run_scaling_bench.sh <mode> [clients]
@@ -27,7 +27,7 @@ set -euo pipefail
 MODE="${1:-unknown}"
 MAX_CLIENTS="${2:-3}"
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESULTS_DIR="${BENCH_DIR}/results"
+RESULTS_DIR="${PQVPN_RESULTS_DIR:-${BENCH_DIR}/results}"
 SERVER_NETNS="vpn_ns1"
 SERVER_IP="10.8.0.1"
 DURATION="${PQVPN_SCALING_SECS:-10}"
@@ -62,52 +62,77 @@ echo "=== Scaling benchmark: ${MODE} ==="
 echo "-- parallel streams (is the ceiling per-stream or the relay?)"
 for P in 1 2 4 8; do
     v=$(ip netns exec "${CLIENT_NS[0]}" iperf3 -c "${SERVER_IP}" -t "${DURATION}" \
-            -P "${P}" -J 2>/dev/null | mbps_of)
+            -P "${P}" -J 2>/dev/null | mbps_of) || true
     echo "   ${P} stream(s): ${v:-failed} Mbps"
     echo "parallel_streams,${P},${v},mbps" >> "${CSV}"
 done
 
 # --- 2. latency under load ---------------------------------------------------
 echo "-- latency while the tunnel is saturated"
-idle=$(ping -c 20 -i 0.2 -W 2 "${SERVER_IP}" 2>/dev/null | \
-       sed -n 's@.*= \([0-9.]*\)/\([0-9.]*\)/.*@\2@p')
+# The idle baseline must be measured from INSIDE a client namespace: this
+# script runs on the host so it can drive several namespaces at once, and the
+# host has no route to the tunnel address. Measuring it here was what made the
+# whole script exit after the parallel-stream section.
+idle=$(ip netns exec "${CLIENT_NS[0]}" ping -c 20 -i 0.2 -W 2 "${SERVER_IP}" 2>/dev/null | \
+       sed -n 's@.*= \([0-9.]*\)/\([0-9.]*\)/.*@\2@p') || true
 # ping from the same namespace as the load, so it queues behind the same traffic
 ip netns exec "${CLIENT_NS[0]}" iperf3 -c "${SERVER_IP}" -t "${DURATION}" \
     >/dev/null 2>&1 &
 LOAD_PID=$!
 sleep 1
 loaded=$(ip netns exec "${CLIENT_NS[0]}" ping -c 20 -i 0.2 -W 5 "${SERVER_IP}" 2>/dev/null | \
-         sed -n 's@.*= \([0-9.]*\)/\([0-9.]*\)/.*@\2@p')
+         sed -n 's@.*= \([0-9.]*\)/\([0-9.]*\)/.*@\2@p') || true
 wait "${LOAD_PID}" 2>/dev/null || true
 echo "   idle ${idle:-?} ms -> under load ${loaded:-?} ms"
 echo "latency,idle,${idle},ms" >> "${CSV}"
 echo "latency,under_load,${loaded},ms" >> "${CSV}"
 
 # --- 3. multi-client scaling -------------------------------------------------
+# One iperf3 server handles ONE test at a time: a second concurrent client is
+# told the server is busy. So each client gets its own server on its own port,
+# and what is measured is genuinely concurrent load on the one shared TUN
+# reader rather than three tests taking turns.
 echo "-- concurrent clients (one shared TUN reader demuxes all of them)"
+for i in 0 1 2; do
+    ip netns exec "${SERVER_NETNS}" iperf3 -s -p $((5201 + i)) -D >/dev/null 2>&1 || true
+done
+sleep 1
+
 for N in $(seq 1 "${MAX_CLIENTS}"); do
     tmp="$(mktemp -d)"
+    started=0
     for i in $(seq 0 $((N - 1))); do
         ns="${CLIENT_NS[$i]}"
         ip netns exec "${ns}" ip link show tun0 >/dev/null 2>&1 || continue
-        ip netns exec "${ns}" iperf3 -c "${SERVER_IP}" -t "${DURATION}" -J \
-            > "${tmp}/${i}.json" 2>/dev/null &
+        ip netns exec "${ns}" iperf3 -c "${SERVER_IP}" -p $((5201 + i)) \
+            -t "${DURATION}" -J > "${tmp}/${i}.json" 2>/dev/null &
+        started=$((started + 1))
     done
     wait
-    total=$(cat "${tmp}"/*.json 2>/dev/null | python3 -c "
-import sys, json
+    # Parse each file on its own: iperf3 -J writes pretty-printed, multi-line
+    # JSON, so concatenating the files and splitting on newlines never yields a
+    # whole object — which is why this silently reported nothing at all.
+    total=$(python3 - "${tmp}" <<'PYEOF'
+import glob, json, os, sys
 tot = 0.0
-buf = sys.stdin.read()
-for chunk in buf.replace('}{', '}\n{').splitlines():
+found = 0
+for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.json'))):
     try:
-        tot += json.loads(chunk)['end']['sum_received']['bits_per_second']
+        with open(path) as fh:
+            tot += json.load(fh)['end']['sum_received']['bits_per_second']
+        found += 1
     except Exception:
         pass
-print(round(tot / 1e6, 2) if tot else '')
-")
+print(round(tot / 1e6, 2) if found else '')
+PYEOF
+)
     rm -rf "${tmp}"
-    echo "   ${N} client(s): ${total:-failed} Mbps total"
+    echo "   ${N} client(s), ${started} tunnel(s) up: ${total:-failed} Mbps total"
     echo "clients,${N},${total},mbps" >> "${CSV}"
+done
+
+for i in 0 1 2; do
+    ip netns exec "${SERVER_NETNS}" pkill -f "iperf3 -s -p $((5201 + i))" 2>/dev/null || true
 done
 
 echo "  -> ${CSV}"
