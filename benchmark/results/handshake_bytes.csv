@@ -7,7 +7,7 @@ classical,full,<<<,Certificate,882
 classical,full,<<<,CertificateVerify,79
 classical,full,<<<,Finished,52
 classical,full,>>>,Certificate,980
-classical,full,>>>,CertificateVerify,78
+classical,full,>>>,CertificateVerify,79
 classical,full,>>>,Finished,52
 classical,full,<<<,NewSessionTicket,713
 classical,full,<<<,NewSessionTicket,713

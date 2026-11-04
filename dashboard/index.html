@@ -129,6 +129,23 @@
     color: var(--ink-2); cursor: pointer; font: inherit; font-size: 13.5px;
   }
   .btn:hover { border-color: var(--bad); color: var(--ink); }
+  /* ---------- control strip ---------- */
+  .control { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .control select {
+    padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--page); color: var(--ink); font: inherit; font-size: 13.5px;
+  }
+  .control .btn.primary { border-color: var(--to-clients); color: var(--ink); }
+  .control .btn.primary:hover:not(:disabled) { background: var(--raised); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn:disabled:hover { border-color: var(--line); color: var(--ink-2); }
+  .control .why { color: var(--ink-2); font-size: 13px; }
+  .control .why code { font-family: var(--mono); font-size: 12.5px; }
+  #control-out {
+    margin-top: 10px; font-family: var(--mono); font-size: 12.5px; color: var(--ink-2);
+    white-space: pre-wrap; max-height: 160px; overflow: auto;
+  }
+  #control-out.bad { color: var(--bad); }
   .table-wrap { overflow-x: auto; }
   .table-empty { color: var(--ink-2); padding: 8px 0 2px; }
   .table-empty code { font-family: var(--mono); font-size: 13px; }
@@ -164,6 +181,18 @@
 </header>
 
 <div class="grid">
+  <section class="panel" aria-labelledby="ctl-h" id="control-panel" hidden>
+    <h2 id="ctl-h">Connection</h2>
+    <div class="control">
+      <label for="profile" class="why">Profile</label>
+      <select id="profile" aria-label="Which client profile to connect with"></select>
+      <button class="btn primary" id="btn-connect">Connect</button>
+      <button class="btn" id="btn-down">Disconnect</button>
+      <span class="why" id="control-why"></span>
+    </div>
+    <div id="control-out"></div>
+  </section>
+
   <section class="panel hero" aria-labelledby="hero-h">
     <h2 id="hero-h">Negotiated for this session <span id="hero-who"></span></h2>
     <div id="hero-body"></div>
@@ -439,10 +468,79 @@ function diffTunnels(server) {
   knownTunnels = now;
 }
 
+// ---------- connection controls ----------
+// Shown in both modes. Read-only hides nothing: a missing button reads as a
+// bug, so the controls render disabled with a line saying how to enable them.
+let controlReady = false, busy = false;
+const ctlPanel = document.getElementById('control-panel');
+const ctlProfile = document.getElementById('profile');
+const ctlConnect = document.getElementById('btn-connect');
+const ctlDown = document.getElementById('btn-down');
+const ctlWhy = document.getElementById('control-why');
+const ctlOut = document.getElementById('control-out');
+
+function setBusy(on, label) {
+  busy = on;
+  // Disabled while a connect is in flight: a second click would spawn a
+  // second daemon, which the slot allocator would then have to clean up.
+  ctlConnect.disabled = on || !controlEnabled;
+  ctlDown.disabled = on || !controlEnabled;
+  ctlProfile.disabled = on || !controlEnabled;
+  ctlConnect.textContent = on && label ? label : 'Connect';
+}
+
+let controlEnabled = false;
+function renderControl(s) {
+  ctlPanel.hidden = false;
+  controlEnabled = !!s.control;
+  if (!controlReady) {
+    const opts = (s.profiles || []);
+    if (opts.length) {
+      ctlProfile.innerHTML = opts
+        .map(p => `<option value="${esc(p)}">${esc(p || 'default')}</option>`).join('');
+      controlReady = true;
+    }
+  }
+  if (controlEnabled) {
+    ctlWhy.textContent = '';
+  } else {
+    ctlWhy.innerHTML = 'Read-only. Restart with <code>pqvpn dashboard --control</code> to enable.';
+    ctlProfile.innerHTML = '<option>unavailable</option>';
+  }
+  if (!busy) setBusy(false);
+}
+
+async function control(path, body, label) {
+  if (!controlEnabled) return;
+  setBusy(true, label);
+  ctlOut.className = '';
+  ctlOut.textContent = label + '…';
+  try {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, headers()),
+      body: JSON.stringify(body || {}),
+    });
+    const j = await r.json().catch(() => ({}));
+    ctlOut.className = j.ok ? '' : 'bad';
+    ctlOut.textContent = (j.output || j.error || (j.ok ? 'done' : 'failed')).trim();
+    event(j.ok ? label + ' succeeded.' : label + ' failed.');
+  } catch (e) {
+    ctlOut.className = 'bad';
+    ctlOut.textContent = String(e);
+  } finally {
+    setBusy(false);
+  }
+}
+
+ctlConnect.onclick = () => control('/connect', { profile: ctlProfile.value }, 'Connecting');
+ctlDown.onclick = () => control('/down', {}, 'Disconnecting');
+
 function render(s) {
   // Rates use the poller's own timestamp so a late or bunched WebSocket
   // delivery never distorts bytes-per-second.
   const now = s.timestamp ? s.timestamp * 1000 : Date.now();
+  renderControl(s);
   renderHeader(s);
   renderHero(s);
   updateThroughput(s, now);

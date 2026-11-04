@@ -59,10 +59,17 @@ repetitions of 25 trials per mode (n = 125)**; the table pools all trials.
 
 | Mode | Median (ms) | Min (ms) | Max (ms) | Repetition medians (ms) |
 |------|-------------|----------|----------|-------------------------|
-| Classical (P-256 + X25519) | 15.80 | 10.64 | 25.19 | 13.92 – 18.06 |
-| PQC (ML-DSA-65 + X25519MLKEM768) | 27.98 | 19.29 | 45.32 | 25.81 – 30.10 |
+| Classical (P-256 + X25519) | 17.22 | 11.01 | 21.52 | 15.56 – 19.06 |
+| PQC (ML-DSA-65 + X25519MLKEM768) | 31.15 | 19.47 | 36.91 | 27.63 – 31.70 |
 
-**PQC ≈ 1.77x slower median** (per-repetition ratios 1.66–1.86x). Cause:
+> **Re-measured 2026-11-04** (kernel 7.0.0-42). The previous run gave 15.80 /
+> 27.98 ms for a ratio of 1.77x. Both modes are ~9–11% slower in absolute terms
+> on this busier host, and **the ratio moved by 0.04x** — which is the point the
+> variance note below makes: the ratio is the stable figure, the absolute values
+> are not. Per-repetition ratios spread wider this time (1.55–2.03x), so the
+> ratio should be read as "about 1.8x", not to two decimal places.
+
+**PQC ≈ 1.81x slower median** (per-repetition ratios 1.55–2.03x). Cause:
 ML-DSA-65 certs 5577 B DER vs 386 B for ECDSA P-256, plus the larger X25519MLKEM768 key
 share. One-time cost per connection.
 
@@ -78,13 +85,17 @@ Resumption verified to skip the KEM + certificate exchange (`Reused, TLSv1.3`,
 
 | Mode | Full median (ms) | Resumed median (ms) | Speedup |
 |------|------------------|---------------------|---------|
-| Classical | 13.21 | 11.80 | 1.12x |
-| PQC | 22.00 | 20.31 | 1.08x |
+| Classical | 18.20 | 14.99 | 1.21x |
+| PQC | 31.43 | 27.53 | 1.14x |
 
-Per-repetition speedups: classical 1.08–1.29x, PQC 1.04–1.14x. These absolute
-values sit below §1's because the three repetitions here ran when the host was
-quieter — **§1 and §2 are separate runs and their absolute values are not
-directly comparable**; compare within a table, not across.
+> **Re-measured 2026-11-04.** Previously 13.21 → 11.80 (1.12x) and 22.00 →
+> 20.31 (1.08x). Both modes are slower in absolute terms, consistent with §1,
+> and **both speedups improved** — resumption helps a little more on this host
+> than it did before. The full-handshake medians here now sit close to §1's
+> (18.20 vs 17.22 classical), where previously they sat well below it, because
+> the two runs were taken under similar load this time.
+
+**§1 and §2 are separate runs; compare within a table, not across.**
 
 Modest on loopback because the KEM is a small share of the cost there. The real
 win is the saved round-trip (one WAN RTT) plus skipped CPU for KEM/cert verify
@@ -226,7 +237,7 @@ fix.
 
 ## Validation
 
-`bash scripts/demo.sh --dry-run` runs five suites — **174 checks**:
+`bash scripts/demo.sh --dry-run` runs five suites — **193 checks**:
 
 | Suite | Checks | Covers |
 |-------|--------|--------|
@@ -234,7 +245,7 @@ fix.
 | `common/test_net_config.py` | 36 | NAT, MSS clamp, route protection/restore, IPv6 guard, DNS fallback |
 | `common/test_keepalive.py` | 7 | keepalive, idle detection, backoff, session-stop cascade |
 | `common/test_resumption.py` | 14 | ticket cache, wrapper flags, real OpenSSL prime→`Reused` |
-| `dashboard/test_dashboard.py` | 25 | IPC envelope, endpoints, token auth, single poller, WS |
+| `dashboard/test_dashboard.py` | 44 | IPC envelope, endpoints, token auth, single poller, WS |
 
 ## Interpretation
 

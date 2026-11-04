@@ -33,17 +33,24 @@ VPNCTL="${PDIR}/cli/vpnctl.py"
 # user remember, so the only thing they see is one password prompt. `status`
 # and `--help` are read-only and work fine unprivileged, so they are exempt —
 # a demo shouldn't ask for a password just to print the tunnel's state.
+NEEDS_ROOT=1
 case "${1:-}" in
     # Read-only or unprivileged by design. The dashboard is here deliberately:
     # the daemons' status sockets are mode 0666 so it can read them as a normal
     # user, and a web server should not hold root it does not need.
-    status|dashboard|--help|-h|help|'') ;;
-    *)
-        if [ "$(id -u)" -ne 0 ]; then
-            exec sudo -p "pqvpn needs root for TUN and routing — password for %u: " \
-                 "$SELF" "$@"
-        fi
+    status|--help|-h|help|'') NEEDS_ROOT=0 ;;
+    dashboard)
+        # ...but `dashboard --control` starts and stops tunnels, which does
+        # need root. Match on the whole argument list, not just $1.
+        NEEDS_ROOT=0
+        for arg in "$@"; do
+            [ "$arg" = "--control" ] && NEEDS_ROOT=1
+        done
         ;;
 esac
+if [ "$NEEDS_ROOT" -eq 1 ] && [ "$(id -u)" -ne 0 ]; then
+    exec sudo -p "pqvpn needs root for TUN and routing — password for %u: " \
+         "$SELF" "$@"
+fi
 
 exec "$PY" "$VPNCTL" "$@"

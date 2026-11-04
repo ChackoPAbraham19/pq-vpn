@@ -364,7 +364,7 @@ image. `.github/workflows/clean-build.yml` runs the same thing on every push.
 
 Three independent layers.
 
-**Unit suites — 174 checks across five files.** Most drive *real* `openssl`
+**Unit suites — 193 checks across five files.** Most drive *real* `openssl`
 processes rather than mocks, so they test the actual integration:
 
 | Suite | Checks | Covers |
@@ -373,7 +373,7 @@ processes rather than mocks, so they test the actual integration:
 | `common/test_net_config.py` | 36 | NAT rule construction, MSS clamp, route protection and restoration, IPv6 guard, DNS fallback, safe TUN teardown |
 | `common/test_keepalive.py` | 7 | Backoff growth, idle detection, keepalive behaviour, session-stop cascade |
 | `common/test_resumption.py` | 14 | Ticket cache paths, atomic rotation, wrapper flags, real OpenSSL prime-then-`Reused` |
-| `dashboard/test_dashboard.py` | 25 | IPC envelope compatibility, endpoints, token auth (401/503), single-poller behaviour, WebSocket delivery |
+| `dashboard/test_dashboard.py` | 44 | IPC envelope compatibility, endpoints, token auth (401/503), single-poller behaviour, WebSocket delivery |
 
 **Clean-build check.** The Docker image proves the documented installation works
 on a machine with no prior state. This caught seven portability bugs the
@@ -407,7 +407,7 @@ expected to move, since both modes traverse identical code paths.
 
 **A note on variance.** The measurement host is an interactive desktop, not a
 quiet benchmark machine. Across five identical repetitions the classical median
-ranged 13.9–18.1 ms and the PQC median 25.8–30.1 ms. **The ratio between modes
+ranged 15.6–19.1 ms and the PQC median 27.6–31.7 ms. **The ratio between modes
 is far more stable than either absolute value**, so the tables below pool
 repetitions and state the spread. Single-run figures from this host should not
 be quoted to two decimal places as if repeatable.
@@ -416,10 +416,10 @@ be quoted to two decimal places as if repeatable.
 
 | Mode | Median (ms) | Min (ms) | Max (ms) | Repetition medians (ms) |
 |------|-------------|----------|----------|-------------------------|
-| Classical (P-256 + X25519) | 15.80 | 10.64 | 25.19 | 13.92 – 18.06 |
-| PQC (ML-DSA-65 + X25519MLKEM768) | 27.98 | 19.29 | 45.32 | 25.81 – 30.10 |
+| Classical (P-256 + X25519) | 17.22 | 11.01 | 21.52 | 15.56 – 19.06 |
+| PQC (ML-DSA-65 + X25519MLKEM768) | 31.15 | 19.47 | 36.91 | 27.63 – 31.70 |
 
-PQC is **1.77x** slower (per-repetition ratios 1.66–1.86x). Cause: size. An
+PQC is **1.81x** slower (per-repetition ratios 1.55–2.03x). Cause: size. An
 ML-DSA-65 certificate is 5577 bytes DER against 386 for ECDSA P-256, its
 signature is 3309 bytes against about 72, and the X25519MLKEM768 key share is
 1222 bytes against 32. Measured message by message in §13.1.
@@ -428,8 +428,8 @@ signature is 3309 bytes against about 72, and the X25519MLKEM768 key share is
 
 | Mode | Full median (ms) | Resumed median (ms) | Speedup |
 |------|------------------|---------------------|---------|
-| Classical | 13.21 | 11.80 | 1.12x |
-| PQC | 22.00 | 20.31 | 1.08x |
+| Classical | 18.20 | 14.99 | 1.21x |
+| PQC | 31.43 | 27.53 | 1.14x |
 
 These absolute values sit below §12.1 because the host was quieter during these
 repetitions — the two sets are separate runs and should be compared within a
@@ -698,7 +698,7 @@ sudo bash scripts/demo.sh --mode pqc --clients 2 --egress
 bash scripts/demo.sh --dry-run --mode pqc
 ```
 
-Runs all 174 checks plus a real handshake benchmark in both modes.
+Runs all 193 checks plus a real handshake benchmark in both modes.
 
 ### In Docker, from a bare image
 

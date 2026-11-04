@@ -22,6 +22,7 @@ import time
 import secrets
 import threading
 import argparse
+import subprocess
 from contextlib import asynccontextmanager
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,6 +35,10 @@ from fastapi.responses import JSONResponse
 from common.daemon_utils import ipc_request, socket_path, discover_sockets, instance_label
 
 DASH_DIR = os.path.dirname(os.path.abspath(__file__))
+# Control mode is off unless --control is passed AND we are actually root.
+# Starting a tunnel needs root; viewing status does not, and the default stays
+# unprivileged on purpose (the daemons' status sockets are mode 0666).
+CONTROL = False
 POLL_INTERVAL = 0.5  # poll daemon status sockets every 0.5s -> <=1s UI updates
 TOKEN_HEADER = 'X-PQVPN-Token'
 
@@ -146,7 +151,10 @@ async def ws_status(ws: WebSocket):
 
 @app.get('/api/status')
 async def api_status():
-    return JSONResponse(feed.latest())
+    snap = dict(feed.latest())
+    snap['control'] = CONTROL
+    snap['profiles'] = available_profiles() if CONTROL else []
+    return JSONResponse(snap)
 
 
 def _unauthorized():
@@ -185,6 +193,80 @@ def _server_command(payload: dict) -> dict | None:
     return ipc_request('server', command=json.dumps(payload))
 
 
+def _vpnctl(*args, timeout: float = 60.0):
+    """Run cli/vpnctl.py and return (ok, text).
+
+    Shelling out rather than importing is deliberate: the CLI already owns
+    profile resolution, daemon spawning and the wait-until-connected loop, and
+    running the same entry point means the GUI cannot drift away from what
+    `pqvpn up` does. The daemon's own error text comes back for free.
+    """
+    cmd = [sys.executable, os.path.join(PROJECT_DIR, 'cli', 'vpnctl.py'), *args]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=timeout, cwd=PROJECT_DIR,
+                             env=dict(os.environ, PYTHONUNBUFFERED='1'))
+    except subprocess.TimeoutExpired:
+        return False, f'{" ".join(args)} timed out after {timeout:.0f}s'
+    except OSError as e:
+        return False, str(e)
+    text = (out.stdout + out.stderr).strip()
+    return out.returncode == 0, text
+
+
+def available_profiles() -> list:
+    """Profile names `up` would accept, from client/config*.yaml."""
+    names = []
+    client_dir = os.path.join(PROJECT_DIR, 'client')
+    try:
+        entries = sorted(os.listdir(client_dir))
+    except OSError:
+        return names
+    for fn in entries:
+        if not fn.startswith('config') or not fn.endswith('.yaml'):
+            continue
+        if fn.endswith('.example.yaml'):
+            continue
+        name = '' if fn == 'config.yaml' else fn[len('config-'):-len('.yaml')]
+        names.append(name)
+    # The bare default sorts first so it is never hidden below the variants.
+    return sorted(names, key=lambda n: (n != '', n))
+
+
+def _no_control():
+    return JSONResponse(
+        {'ok': False,
+         'error': 'this dashboard is read-only. Restart it with: pqvpn dashboard --control'},
+        status_code=403)
+
+
+@app.post('/connect')
+async def connect(payload: dict | None = None,
+                  x_pqvpn_token: str | None = Header(default=None)):
+    """Bring the tunnel up and wait until routing is actually live."""
+    if not token_ok(x_pqvpn_token):
+        return _unauthorized()
+    if not CONTROL:
+        return _no_control()
+    profile = (payload or {}).get('profile', '')
+    args = ['up', profile] if profile else ['up']
+    ok, text = _vpnctl(*args, timeout=90.0)
+    feed._last = None          # next poll re-reads rather than serving a stale snapshot
+    return JSONResponse({'ok': ok, 'output': text}, status_code=200 if ok else 500)
+
+
+@app.post('/down')
+async def down(x_pqvpn_token: str | None = Header(default=None)):
+    """Disconnect and restore routes and DNS."""
+    if not token_ok(x_pqvpn_token):
+        return _unauthorized()
+    if not CONTROL:
+        return _no_control()
+    ok, text = _vpnctl('down', timeout=45.0)
+    feed._last = None
+    return JSONResponse({'ok': ok, 'output': text}, status_code=200 if ok else 500)
+
+
 app.mount('/', StaticFiles(directory=DASH_DIR, html=True), name='static')
 
 
@@ -195,12 +277,24 @@ def main():
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--token', default=None,
                         help=f'shared secret for {TOKEN_HEADER} (default: $PQVPN_DASH_TOKEN or random)')
+    parser.add_argument('--control', action='store_true',
+                        help='enable Connect/Disconnect (needs root)')
     args = parser.parse_args()
     DASH_TOKEN = resolve_token(args.token)
 
+    global CONTROL
+    if args.control:
+        if os.geteuid() != 0:
+            print('[dashboard] --control needs root (TUN, routes, DNS). '
+                  'Run: pqvpn dashboard --control', file=sys.stderr)
+            sys.exit(1)
+        CONTROL = True
+
     import uvicorn
     print(f'[dashboard] serving http://{args.host}:{args.port} (status poll {POLL_INTERVAL}s)')
-    print(f'[dashboard] token for kick/rekey ({TOKEN_HEADER}): {DASH_TOKEN}')
+    print(f'[dashboard] token for actions ({TOKEN_HEADER}): {DASH_TOKEN}')
+    print('[dashboard] control mode: Connect/Disconnect enabled' if CONTROL
+          else '[dashboard] read-only (add --control to enable Connect/Disconnect)')
     if args.host not in ('127.0.0.1', 'localhost', '::1'):
         print('[dashboard] WARNING: bound to a non-loopback address — status is '
               'readable by anyone who can reach it; only the token guards actions')

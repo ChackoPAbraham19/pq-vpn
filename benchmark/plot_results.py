@@ -65,18 +65,35 @@ def _read_throughput(path: str) -> dict:
     return data
 
 
-def _read_file_transfer(path: str) -> dict:
-    data = {}
+def _read_transfer_sweep(path: str) -> dict:
+    """{size_bytes: [mbps, ...]} plus setup cost, from the multi-size CSV."""
+    rate, setup = {}, {}
     if not os.path.exists(path):
-        return data
+        return {'rate': rate, 'setup': setup}
     with open(path) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            data[row['mode']] = {
-                'seconds': float(row['seconds']),
-                'sha256_ok': row['sha256_ok'],
-            }
-    return data
+        for row in csv.DictReader(f):
+            if row.get('sha256_ok') != 'yes' or not row.get('mbps'):
+                continue
+            size = int(row['size_bytes'])
+            rate.setdefault(size, []).append(float(row['mbps']))
+            if row.get('total_ms'):
+                setup.setdefault(size, []).append(float(row['total_ms']))
+    return {'rate': rate, 'setup': setup}
+
+
+def _read_scaling(path: str) -> dict:
+    """{test: {variant: value}} from scaling_<mode>.csv."""
+    out = defaultdict(dict)
+    if not os.path.exists(path):
+        return out
+    with open(path) as f:
+        for row in csv.DictReader(f):
+            if row.get('value'):
+                try:
+                    out[row['test']][row['variant']] = float(row['value'])
+                except ValueError:
+                    pass
+    return out
 
 
 def _plot_handshake(data: dict):
@@ -175,24 +192,89 @@ def _plot_throughput(data: dict):
     print(f'  throughput.png')
 
 
-def _plot_file_transfer(data: dict):
-    if not data:
+def _plot_transfer_sweep(by_mode: dict):
+    """Throughput against transfer size, log x, with the min-max band.
+
+    One measure across a range, so a line: the question is the shape of the
+    curve and whether the two modes converge once the transfer is big enough
+    for the handshake to stop mattering.
+    """
+    if not any(d['rate'] for d in by_mode.values()):
         return
-    fig, ax = plt.subplots(figsize=(8, 5))
-    modes = list(data.keys())
-    vals = [data[m]['seconds'] for m in modes]
-    colors = ['#4c72b0', '#dd8452']
-    bars = ax.bar(modes, vals, color=colors[:len(modes)], width=0.5, edgecolor='black')
-    for bar, v in zip(bars, vals):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
-                f'{v:.1f}s', ha='center', va='bottom')
-    ax.set_ylabel('Transfer Time (s)')
-    ax.set_title(f'File Transfer Benchmark ({modes[0].replace("_", "MB") if modes else "?"})')
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    colors = {'classical': '#4c72b0', 'pqc': '#dd8452'}
+    for mode, d in by_mode.items():
+        if not d['rate']:
+            continue
+        sizes = sorted(d['rate'])
+        med = [np.median(d['rate'][x]) for x in sizes]
+        lo = [min(d['rate'][x]) for x in sizes]
+        hi = [max(d['rate'][x]) for x in sizes]
+        c = colors.get(mode, '#555555')
+        ax1.plot(sizes, med, marker='o', color=c, label=mode)
+        ax1.fill_between(sizes, lo, hi, color=c, alpha=0.15)
+        if d['setup']:
+            ssz = sorted(d['setup'])
+            ax2.plot(ssz, [np.median(d['setup'][x]) for x in ssz],
+                     marker='o', color=c, label=mode)
+    for ax in (ax1, ax2):
+        ax.set_xscale('log')
+        ax.set_xlabel('Transfer size (bytes)')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(alpha=0.25)
+        ax.legend(frameon=False)
+    ax1.set_ylabel('Throughput (Mbps)')
+    ax1.set_title('Sustained rate rises until the relay caps it')
+    ax2.set_yscale('log')
+    ax2.set_ylabel('Total time (ms)')
+    ax2.set_title('Small transfers are dominated by setup')
+    fig.suptitle('Transfer through the tunnel, by size (median, min-max band)',
+                 fontweight='bold')
     plt.tight_layout()
-    fig.savefig(os.path.join(OUT_DIR, 'file_transfer.png'), dpi=150)
-    print(f'  file_transfer.png')
+    fig.savefig(os.path.join(OUT_DIR, 'transfer_sweep.png'), dpi=150)
+    print('  transfer_sweep.png')
+
+
+def _plot_scaling(by_mode: dict):
+    """Parallel streams and concurrent clients: does anything raise the ceiling?"""
+    has = {k: v for k, v in by_mode.items() if v}
+    if not has:
+        return
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.6))
+    colors = {'classical': '#4c72b0', 'pqc': '#dd8452'}
+    drew = False
+    for mode, d in has.items():
+        c = colors.get(mode, '#555555')
+        ps = d.get('parallel_streams', {})
+        if ps:
+            xs = sorted(ps, key=lambda v: int(v))
+            ax1.plot([int(x) for x in xs], [ps[x] for x in xs],
+                     marker='o', color=c, label=mode)
+            drew = True
+        cl = d.get('clients', {})
+        if cl:
+            xs = sorted(cl, key=lambda v: int(v))
+            ax2.plot([int(x) for x in xs], [cl[x] for x in xs],
+                     marker='o', color=c, label=mode)
+            drew = True
+    if not drew:
+        plt.close(fig)
+        return
+    ax1.set_xlabel('Parallel TCP streams')
+    ax1.set_title('If the ceiling were per-stream, this would rise')
+    ax2.set_xlabel('Concurrent clients')
+    ax2.set_title('One shared TUN reader serves all of them')
+    for ax in (ax1, ax2):
+        ax.set_ylabel('Total throughput (Mbps)')
+        ax.set_ylim(bottom=0)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(alpha=0.25)
+        ax.legend(frameon=False)
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUT_DIR, 'scaling.png'), dpi=150)
+    print('  scaling.png')
 
 
 def _read_wan(path: str) -> list:
@@ -338,9 +420,10 @@ def main():
     tp2 = _read_throughput(os.path.join(args.dir, 'throughput_pqc.csv'))
     tp.update(tp2)
 
-    ft = _read_file_transfer(os.path.join(args.dir, 'file_transfer_classical.csv'))
-    ft2 = _read_file_transfer(os.path.join(args.dir, 'file_transfer_pqc.csv'))
-    ft.update(ft2)
+    ft = {m: _read_transfer_sweep(os.path.join(args.dir, f'file_transfer_{m}.csv'))
+          for m in ('classical', 'pqc')}
+    sc = {m: _read_scaling(os.path.join(args.dir, f'scaling_{m}.csv'))
+          for m in ('classical', 'pqc')}
 
     rs = _read_resume(os.path.join(args.dir, 'handshake_resume_classical.csv'))
     rs2 = _read_resume(os.path.join(args.dir, 'handshake_resume_pqc.csv'))
@@ -357,7 +440,8 @@ def main():
     _plot_resume(rs)
     _plot_latency(lat)
     _plot_throughput(tp)
-    _plot_file_transfer(ft)
+    _plot_transfer_sweep(ft)
+    _plot_scaling(sc)
     _plot_wan(wan_c, wan_p, wres_c, wres_p)
     _plot_handshake_bytes(hb)
     print(f'Plots saved to: {OUT_DIR}')

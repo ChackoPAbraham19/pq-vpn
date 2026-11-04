@@ -140,6 +140,101 @@ def test_fastapi_endpoints():
         client.close()
 
 
+def test_control_endpoints():
+    """Connect/Disconnect: token-guarded, and refused unless running privileged.
+
+    The dashboard runs unprivileged by default on purpose, so the control
+    endpoints must refuse rather than half-work. vpnctl is faked here: this
+    tests the guard and the plumbing, not the tunnel.
+    """
+    from fastapi.testclient import TestClient
+    import dashboard.dashboard_server as ds
+
+    client = TestClient(ds.app)
+    auth = {'X-PQVPN-Token': ds.DASH_TOKEN}
+    orig_control, orig_vpnctl = ds.CONTROL, ds._vpnctl
+    try:
+        # --- no token, whatever the mode
+        ds.CONTROL = True
+        test('POST /connect without token -> 401',
+             client.post('/connect', json={}).status_code == 401)
+        test('POST /down without token -> 401',
+             client.post('/down').status_code == 401)
+        test('POST /connect with wrong token -> 401',
+             client.post('/connect', json={},
+                         headers={'X-PQVPN-Token': 'wrong'}).status_code == 401)
+
+        # --- read-only mode refuses even with the token
+        ds.CONTROL = False
+        r = client.post('/connect', json={'profile': 'vps'}, headers=auth)
+        test('read-only mode refuses /connect with 403', r.status_code == 403,
+             f'status={r.status_code}')
+        test('and the refusal names how to enable it',
+             'dashboard --control' in r.text, r.text[:120])
+        test('read-only mode refuses /down with 403',
+             client.post('/down', headers=auth).status_code == 403)
+
+        # --- control mode, success
+        calls = []
+        ds.CONTROL = True
+        ds._vpnctl = lambda *a, **k: (calls.append(a) or (True, 'Connected.'))
+        r = client.post('/connect', json={'profile': 'vps'}, headers=auth)
+        test('control mode accepts /connect', r.status_code == 200 and r.json().get('ok') is True,
+             r.text[:120])
+        test('the chosen profile is passed through to vpnctl',
+             calls and calls[-1] == ('up', 'vps'), str(calls[-1:]))
+        client.post('/connect', json={}, headers=auth)
+        test('no profile means a bare `up` (CLI picks the default)',
+             calls[-1] == ('up',), str(calls[-1:]))
+        client.post('/down', headers=auth)
+        test('/down calls vpnctl down', calls[-1] == ('down',), str(calls[-1:]))
+
+        # --- control mode, failure surfaces the daemon's own words
+        ds._vpnctl = lambda *a, **k: (False, 'verify error:num=19: self-signed certificate')
+        r = client.post('/connect', json={'profile': 'vps'}, headers=auth)
+        test('a failed connect returns 500', r.status_code == 500, f'status={r.status_code}')
+        test('and surfaces the daemon error rather than a bare failure',
+             'num=19' in r.text, r.text[:120])
+    finally:
+        ds.CONTROL, ds._vpnctl = orig_control, orig_vpnctl
+        client.close()
+
+
+def test_status_reports_control_mode():
+    """The page cannot render the right controls without being told the mode."""
+    from fastapi.testclient import TestClient
+    import dashboard.dashboard_server as ds
+
+    client = TestClient(ds.app)
+    orig = ds.CONTROL
+    try:
+        ds.CONTROL = False
+        body = client.get('/api/status').json()
+        test('read-only status reports control=false', body.get('control') is False)
+        test('and offers no profiles to pick from', body.get('profiles') == [])
+
+        ds.CONTROL = True
+        body = client.get('/api/status').json()
+        test('control status reports control=true', body.get('control') is True)
+        test('and lists profiles found in client/',
+             isinstance(body.get('profiles'), list) and len(body['profiles']) > 0,
+             str(body.get('profiles'))[:100])
+    finally:
+        ds.CONTROL = orig
+        client.close()
+
+
+def test_profile_listing():
+    """Profile names come from client/config*.yaml, excluding the examples."""
+    import dashboard.dashboard_server as ds
+
+    names = ds.available_profiles()
+    test('the bare default is offered first', names and names[0] == '', str(names[:3]))
+    test('named profiles are discovered', 'vps' in names and 'pqc' in names, str(names))
+    test('example templates are not offered as profiles',
+         not any('example' in n for n in names), str(names))
+
+
 def test_ws_streams_snapshots():
     """The WebSocket feed broadcasts snapshots to connected clients."""
     from fastapi.testclient import TestClient
@@ -315,6 +410,9 @@ if __name__ == '__main__':
     test_ipc_command_envelope()
     test_multi_instance_ipc()
     test_fastapi_endpoints()
+    test_control_endpoints()
+    test_status_reports_control_mode()
+    test_profile_listing()
     test_ws_streams_snapshots()
     test_status_feed_change_detection()
     test_feed_under_missing_sockets()

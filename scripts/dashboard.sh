@@ -75,4 +75,10 @@ printf '\n== Local dashboard\n'
 printf '   open:  http://127.0.0.1:%s\n' "$PORT"
 printf '   token: %s\n' "$TOKEN"
 printf '   (shows daemons running on this machine; Ctrl-C to stop)\n\n'
-exec env PQVPN_DASH_TOKEN="$TOKEN" "$PY" "${PDIR}/dashboard/dashboard_server.py" --port "$PORT"
+CONTROL_ARG=()
+if [ "${PQVPN_DASH_CONTROL:-}" = "1" ]; then
+    CONTROL_ARG=(--control)
+    printf '   control: Connect/Disconnect enabled (running as root)\n'
+fi
+exec env PQVPN_DASH_TOKEN="$TOKEN" "$PY" "${PDIR}/dashboard/dashboard_server.py" \
+    --port "$PORT" "${CONTROL_ARG[@]}"

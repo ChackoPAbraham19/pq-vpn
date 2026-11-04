@@ -426,8 +426,10 @@ def disconnect():
 @click.option('--vps', is_flag=True,
               help="Show the deployed server's tunnels, over an SSH forward")
 @click.option('--port', type=int, default=None, help='Local port (default 8080)')
-@click.option('--token', default=None, help='Token for kick/rekey (default "demo")')
-def dashboard(vps, port, token):
+@click.option('--token', default=None, help='Token for actions (default "demo")')
+@click.option('--control', is_flag=True,
+              help='Enable Connect/Disconnect in the page (needs root)')
+def dashboard(vps, port, token, control):
     """Open the live web dashboard (http://127.0.0.1:8080).
 
     Runs unprivileged on purpose: the daemons' IPC sockets are mode 0666 so the
@@ -449,6 +451,16 @@ def dashboard(vps, port, token):
     if os.geteuid() == 0 and env.get('SUDO_USER'):
         click.echo('Note: running the dashboard as root is unnecessary '
                    '(status sockets are world-readable).', err=True)
+    if control:
+        if vps:
+            click.echo('Error: --control is for the local dashboard; --vps shows a '
+                       'remote server you cannot start tunnels on from here.', err=True)
+            sys.exit(1)
+        if os.geteuid() != 0:
+            click.echo('Error: --control needs root. Run: pqvpn dashboard --control',
+                       err=True)
+            sys.exit(1)
+        env['PQVPN_DASH_CONTROL'] = '1'
     args = ['bash', script] + (['--vps'] if vps else [])
     os.execvpe('bash', args, env)
 
