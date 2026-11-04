@@ -448,7 +448,9 @@ def dashboard(vps, port, token, control):
         env['PQVPN_DASH_PORT'] = str(port)
     if token is not None:
         env['PQVPN_DASH_TOKEN'] = token
-    if os.geteuid() == 0 and env.get('SUDO_USER'):
+    # --control is the one mode that genuinely needs root, so saying root is
+    # unnecessary there contradicts the flag the user just passed.
+    if os.geteuid() == 0 and env.get('SUDO_USER') and not control:
         click.echo('Note: running the dashboard as root is unnecessary '
                    '(status sockets are world-readable).', err=True)
     if control:

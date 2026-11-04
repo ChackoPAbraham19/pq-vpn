@@ -143,6 +143,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title='PQ-VPN Dashboard', lifespan=lifespan)
 
 
+def with_control(snap: dict) -> dict:
+    """Attach the control-mode fields to a poller snapshot.
+
+    The poller knows nothing about control mode, and both readers need the same
+    fields: the WebSocket, which is what the page actually consumes, and
+    GET /api/status. Decorating in one place is what keeps them from drifting
+    -- when only /api/status carried `control`, the page saw `undefined` on
+    every frame, disabled Connect/Disconnect and stayed that way even when the
+    server was running with --control.
+
+    Returns a copy: the WebSocket compares snapshots by identity to decide
+    whether anything changed, so the cached one must not be touched.
+    """
+    out = dict(snap)
+    out['control'] = CONTROL
+    out['profiles'] = available_profiles() if CONTROL else []
+    return out
+
+
 @app.websocket('/ws/status')
 async def ws_status(ws: WebSocket):
     import asyncio
@@ -156,7 +175,7 @@ async def ws_status(ws: WebSocket):
             # keeps delivery locked to the poller's cadence instead of beating
             # against it, which showed up as a sawtooth in the rate chart.
             if snapshot is not last:
-                await ws.send_json(snapshot)
+                await ws.send_json(with_control(snapshot))
                 last = snapshot
             await asyncio.sleep(0.05)
     except WebSocketDisconnect:
@@ -165,10 +184,7 @@ async def ws_status(ws: WebSocket):
 
 @app.get('/api/status')
 async def api_status():
-    snap = dict(feed.latest())
-    snap['control'] = CONTROL
-    snap['profiles'] = available_profiles() if CONTROL else []
-    return JSONResponse(snap)
+    return JSONResponse(with_control(feed.latest()))
 
 
 def _unauthorized():

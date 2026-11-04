@@ -324,6 +324,43 @@ def test_profile_listing():
          not any('example' in n for n in names), str(names))
 
 
+def test_ws_carries_control_mode():
+    """The page learns the mode from the WebSocket, so the mode must be in it.
+
+    The page opens /ws/status and never calls /api/status. When only the latter
+    carried `control`, every frame arrived without it, `controlEnabled` fell to
+    false on the first frame and Connect/Disconnect sat disabled for good --
+    with `--control` passed and the server in control mode. Asserting on
+    /api/status alone could not see that, because the page does not read it.
+    """
+    from fastapi.testclient import TestClient
+    import dashboard.dashboard_server as ds
+
+    ds.feed._interval = 0.05
+    client = TestClient(ds.app)
+    orig = ds.CONTROL
+    try:
+        ds.CONTROL = True
+        with client.websocket_connect('/ws/status') as ws:
+            frame = ws.receive_json()
+        test('WebSocket frame says control is enabled', frame.get('control') is True,
+             str(sorted(frame.keys()))[:160])
+        test('WebSocket frame carries the profile list',
+             isinstance(frame.get('profiles'), list) and len(frame['profiles']) > 0,
+             str(frame.get('profiles'))[:100])
+        test('and it agrees with /api/status',
+             frame.get('profiles') == client.get('/api/status').json().get('profiles'))
+
+        ds.CONTROL = False
+        with client.websocket_connect('/ws/status') as ws:
+            frame = ws.receive_json()
+        test('a read-only server says so in the frame too', frame.get('control') is False)
+        test('and offers no profiles there either', frame.get('profiles') == [])
+    finally:
+        ds.CONTROL = orig
+        client.close()
+
+
 def test_ws_streams_snapshots():
     """The WebSocket feed broadcasts snapshots to connected clients."""
     from fastapi.testclient import TestClient
@@ -504,6 +541,7 @@ if __name__ == '__main__':
     test_page_auth_wiring()
     test_token_embedded_for_loopback()
     test_profile_listing()
+    test_ws_carries_control_mode()
     test_ws_streams_snapshots()
     test_status_feed_change_detection()
     test_feed_under_missing_sockets()
