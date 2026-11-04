@@ -28,6 +28,12 @@ PORT=9998
 mkdir -p "${RESULTS_DIR}"
 CSV="${RESULTS_DIR}/file_transfer_${MODE}.csv"
 
+# A server left behind by an interrupted run would still be listening on this
+# port, and the readiness check below cannot tell it apart from a fresh one --
+# so the sweep would silently measure against a stale process.
+ip netns exec "${SERVER_NETNS}" pkill -f "transfer_bench.py --serve" 2>/dev/null || true
+sleep 0.3
+
 # The server runs in the server namespace and is reached over the tunnel.
 ip netns exec "${SERVER_NETNS}" "$PY" "${BENCH_DIR}/transfer_bench.py" \
     --serve 0.0.0.0 "${PORT}" >/dev/null 2>&1 &

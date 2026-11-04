@@ -1,3 +1,10 @@
-mode,protocol,mbps
-pqc,tcp,635.86
-pqc,udp,999.9
+mode,protocol,rep,mbps,loss_pct
+pqc,tcp,1,649.74,
+pqc,tcp,2,731.32,
+pqc,tcp,3,686.85,
+pqc,udp_1000m,1,963.40,3.64
+pqc,udp_1000m,2,994.63,0.52
+pqc,udp_1000m,3,972.41,2.74
+pqc,udp_max,1,1343.87,64.76
+pqc,udp_max,2,1317.92,59.04
+pqc,udp_max,3,1309.43,61.92

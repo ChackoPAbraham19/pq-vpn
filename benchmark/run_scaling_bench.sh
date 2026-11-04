@@ -22,7 +22,18 @@ set -uo pipefail
 #    is a bottleneck is the obvious question about the design, and it has never
 #    been measured. Total throughput with 1, 2 and 3 clients at once.
 #
-# Writes results/scaling_<mode>.csv: test,variant,value,unit
+# Every data point is repeated PQVPN_SCALING_REPS times (default 3). Single
+# samples were the weak spot of the first version of this benchmark: the
+# multi-client result reproduced across runs and could be defended, but the
+# parallel-stream and latency-under-load points rested on one 10 s sample each,
+# which is not enough to separate a finding from scheduler noise.
+#
+# Writes results/scaling_<mode>.csv: test,variant,rep,value,unit,detail
+#
+# The detail column records HOW each number was obtained -- above all, how
+# many clients actually reported. A multi-client total that silently came
+# from two clients instead of three is indistinguishable from a real
+# ceiling, and that ambiguity is what made an earlier run unusable.
 
 MODE="${1:-unknown}"
 MAX_CLIENTS="${2:-3}"
@@ -31,11 +42,12 @@ RESULTS_DIR="${PQVPN_RESULTS_DIR:-${BENCH_DIR}/results}"
 SERVER_NETNS="vpn_ns1"
 SERVER_IP="10.8.0.1"
 DURATION="${PQVPN_SCALING_SECS:-10}"
+REPS="${PQVPN_SCALING_REPS:-3}"
 CLIENT_NS=(vpn_ns2 vpn_ns3 vpn_ns4)
 
 mkdir -p "${RESULTS_DIR}"
 CSV="${RESULTS_DIR}/scaling_${MODE}.csv"
-echo "test,variant,value,unit" > "${CSV}"
+echo "test,variant,rep,value,unit,detail" > "${CSV}"
 
 command -v iperf3 >/dev/null 2>&1 || { echo "iperf3 not installed" >&2; exit 1; }
 
@@ -56,15 +68,18 @@ except Exception:
 "
 }
 
-echo "=== Scaling benchmark: ${MODE} ==="
+echo "=== Scaling benchmark: ${MODE} (${REPS} reps per point, ${DURATION}s each) ==="
 
 # --- 1. parallel streams -----------------------------------------------------
 echo "-- parallel streams (is the ceiling per-stream or the relay?)"
 for P in 1 2 4 8; do
-    v=$(ip netns exec "${CLIENT_NS[0]}" iperf3 -c "${SERVER_IP}" -t "${DURATION}" \
-            -P "${P}" -J 2>/dev/null | mbps_of) || true
-    echo "   ${P} stream(s): ${v:-failed} Mbps"
-    echo "parallel_streams,${P},${v},mbps" >> "${CSV}"
+    for rep in $(seq "${REPS}"); do
+        v=$(ip netns exec "${CLIENT_NS[0]}" iperf3 -c "${SERVER_IP}" -t "${DURATION}" \
+                -P "${P}" -J 2>/dev/null | mbps_of) || true
+        echo "   ${P} stream(s) rep ${rep}: ${v:-failed} Mbps"
+        echo "parallel_streams,${P},${rep},${v},mbps,streams=${P}" >> "${CSV}"
+        sleep 1
+    done
 done
 
 # --- 2. latency under load ---------------------------------------------------
@@ -73,19 +88,22 @@ echo "-- latency while the tunnel is saturated"
 # script runs on the host so it can drive several namespaces at once, and the
 # host has no route to the tunnel address. Measuring it here was what made the
 # whole script exit after the parallel-stream section.
-idle=$(ip netns exec "${CLIENT_NS[0]}" ping -c 20 -i 0.2 -W 2 "${SERVER_IP}" 2>/dev/null | \
-       sed -n 's@.*= \([0-9.]*\)/\([0-9.]*\)/.*@\2@p') || true
-# ping from the same namespace as the load, so it queues behind the same traffic
-ip netns exec "${CLIENT_NS[0]}" iperf3 -c "${SERVER_IP}" -t "${DURATION}" \
-    >/dev/null 2>&1 &
-LOAD_PID=$!
-sleep 1
-loaded=$(ip netns exec "${CLIENT_NS[0]}" ping -c 20 -i 0.2 -W 5 "${SERVER_IP}" 2>/dev/null | \
-         sed -n 's@.*= \([0-9.]*\)/\([0-9.]*\)/.*@\2@p') || true
-wait "${LOAD_PID}" 2>/dev/null || true
-echo "   idle ${idle:-?} ms -> under load ${loaded:-?} ms"
-echo "latency,idle,${idle},ms" >> "${CSV}"
-echo "latency,under_load,${loaded},ms" >> "${CSV}"
+for rep in $(seq "${REPS}"); do
+    idle=$(ip netns exec "${CLIENT_NS[0]}" ping -c 20 -i 0.2 -W 2 "${SERVER_IP}" 2>/dev/null | \
+           sed -n 's@.*= \([0-9.]*\)/\([0-9.]*\)/.*@\2@p') || true
+    # ping from the same namespace as the load, so it queues behind the same traffic
+    ip netns exec "${CLIENT_NS[0]}" iperf3 -c "${SERVER_IP}" -t "${DURATION}" \
+        >/dev/null 2>&1 &
+    LOAD_PID=$!
+    sleep 1
+    loaded=$(ip netns exec "${CLIENT_NS[0]}" ping -c 20 -i 0.2 -W 5 "${SERVER_IP}" 2>/dev/null | \
+             sed -n 's@.*= \([0-9.]*\)/\([0-9.]*\)/.*@\2@p') || true
+    wait "${LOAD_PID}" 2>/dev/null || true
+    echo "   rep ${rep}: idle ${idle:-?} ms -> under load ${loaded:-?} ms"
+    echo "latency,idle,${rep},${idle},ms,ping20" >> "${CSV}"
+    echo "latency,under_load,${rep},${loaded},ms,ping20+iperf" >> "${CSV}"
+    sleep 1
+done
 
 # --- 3. multi-client scaling -------------------------------------------------
 # One iperf3 server handles ONE test at a time: a second concurrent client is
@@ -93,18 +111,36 @@ echo "latency,under_load,${loaded},ms" >> "${CSV}"
 # and what is measured is genuinely concurrent load on the one shared TUN
 # reader rather than three tests taking turns.
 echo "-- concurrent clients (one shared TUN reader demuxes all of them)"
+# Dedicated ports, deliberately NOT 5201: that port already carries the server
+# used by the two sections above, and an iperf3 server runs ONE test at a time.
+# Reusing it meant a client could be refused as "server busy" while the others
+# succeeded, producing a total that looks like a ceiling but is really a
+# missing client.
+CPORT_BASE="${PQVPN_SCALING_PORT_BASE:-5301}"
 for i in 0 1 2; do
-    ip netns exec "${SERVER_NETNS}" iperf3 -s -p $((5201 + i)) -D >/dev/null 2>&1 || true
+    ip netns exec "${SERVER_NETNS}" iperf3 -s -p $((CPORT_BASE + i)) -D >/dev/null 2>&1 || true
 done
 sleep 1
 
+# Verify each server is listening before trusting any total below.
+srv_up=0
+for i in 0 1 2; do
+    if ip netns exec "${SERVER_NETNS}" ss -ltn 2>/dev/null | grep -q ":$((CPORT_BASE + i)) "; then
+        srv_up=$((srv_up + 1))
+    else
+        echo "   ! no iperf3 server on port $((CPORT_BASE + i)): that client cannot be measured" >&2
+    fi
+done
+echo "   ${srv_up}/3 per-client iperf3 servers listening on ${CPORT_BASE}-$((CPORT_BASE + 2))"
+
 for N in $(seq 1 "${MAX_CLIENTS}"); do
+  for rep in $(seq "${REPS}"); do
     tmp="$(mktemp -d)"
     started=0
     for i in $(seq 0 $((N - 1))); do
         ns="${CLIENT_NS[$i]}"
         ip netns exec "${ns}" ip link show tun0 >/dev/null 2>&1 || continue
-        ip netns exec "${ns}" iperf3 -c "${SERVER_IP}" -p $((5201 + i)) \
+        ip netns exec "${ns}" iperf3 -c "${SERVER_IP}" -p $((CPORT_BASE + i)) \
             -t "${DURATION}" -J > "${tmp}/${i}.json" 2>/dev/null &
         started=$((started + 1))
     done
@@ -112,27 +148,27 @@ for N in $(seq 1 "${MAX_CLIENTS}"); do
     # Parse each file on its own: iperf3 -J writes pretty-printed, multi-line
     # JSON, so concatenating the files and splitting on newlines never yields a
     # whole object — which is why this silently reported nothing at all.
-    total=$(python3 - "${tmp}" <<'PYEOF'
-import glob, json, os, sys
-tot = 0.0
-found = 0
-for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.json'))):
-    try:
-        with open(path) as fh:
-            tot += json.load(fh)['end']['sum_received']['bits_per_second']
-        found += 1
-    except Exception:
-        pass
-print(round(tot / 1e6, 2) if found else '')
-PYEOF
-)
+    # Report the total AND how it was composed. "found" is the number of
+    # clients that produced a parseable result; if it is below N the total is
+    # not an N-client measurement and must not be plotted as one.
+    res=$(python3 "${BENCH_DIR}/_scaling_parse.py" "${tmp}")
     rm -rf "${tmp}"
-    echo "   ${N} client(s), ${started} tunnel(s) up: ${total:-failed} Mbps total"
-    echo "clients,${N},${total},mbps" >> "${CSV}"
+    total=$(echo "${res}" | cut -d' ' -f1)
+    found=$(echo "${res}" | cut -d' ' -f2)
+    per=$(echo "${res}" | cut -d' ' -f3)
+    if [ "${found:-0}" -ne "${started}" ] || [ "${started}" -ne "${N}" ]; then
+        echo "   ! ${N} client(s) rep ${rep}: ${started} tunnel(s) up, ${found:-0} reported [${per}] -- RECORDED AS INVALID" >&2
+        echo "clients,${N},${rep},,mbps,INCOMPLETE_${found:-0}of${N}" >> "${CSV}"
+    else
+        echo "   ${N} client(s) rep ${rep}: ${total} Mbps total  [${per}]"
+        echo "clients,${N},${rep},${total},mbps,${found}of${N}:${per}" >> "${CSV}"
+    fi
+    sleep 1
+  done
 done
 
 for i in 0 1 2; do
-    ip netns exec "${SERVER_NETNS}" pkill -f "iperf3 -s -p $((5201 + i))" 2>/dev/null || true
+    ip netns exec "${SERVER_NETNS}" pkill -f "iperf3 -s -p $((CPORT_BASE + i))" 2>/dev/null || true
 done
 
 echo "  -> ${CSV}"

@@ -12,8 +12,8 @@ apples-to-apples on the same tunnel.
 ("harvest now, decrypt later"). NIST finalised the replacement algorithms (FIPS 203/204)
 in 2024; this project puts them in a complete VPN and measures what they cost.
 
-**Result:** post-quantum security costs about 1.8x on the one-time handshake
-(≈12 ms on loopback) and **nothing** on steady-state latency or throughput.
+**Result:** post-quantum security costs about 1.5x on the one-time handshake
+(≈10 ms on loopback) and **nothing** on steady-state latency or throughput.
 Measured against a real VPS, the cost turns out to be about **one extra round
 trip** — +124 ms at 99 ms RTT. The PQC handshake flight is 16 KB against a
 14.6 KB initial congestion window, which is consistent with that; session
@@ -123,38 +123,45 @@ results and findings — is in [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md
 
 Everything below except the WAN rows comes from **one run on 2026-11-04**
 (`sudo bash scripts/run_all_benchmarks.sh`), so the tables are comparable with
-each other.
+each other. Every point is the median of repeated measurements, and the sweep
+validates its own output before anything here is quoted.
 
 | Metric | Classical | PQC | Overhead |
 |--------|-----------|-----|----------|
-| **TLS handshake** (median, n=125) | 16.8 ms | 30.1 ms | 1.79× |
-| **Resumed handshake** (median, n=60) | 13.2 ms | 24.3 ms | 1.15–1.29× vs full |
-| **Ping RTT through tunnel** (idle) | 1.30 ms | 1.15 ms | none measurable |
-| **TCP throughput** (iperf3, 1 stream) | 635.2 Mbps | 635.9 Mbps | 0.1 % |
-| **UDP throughput** | 999.9 Mbps | 999.9 Mbps | 0 % |
-| **Bulk transfer, 1 GB** | 1081 Mbps | 1042 Mbps | 3.6 % |
+| **TLS handshake** (median, n=125) | 18.9 ms | 29.2 ms | 1.54× |
+| **Resumed handshake** (median, n=60) | 14.6 ms | 25.5 ms | 1.17–1.21× vs full |
+| **Ping RTT through tunnel** (idle) | 1.29 ms | 1.35 ms | none measurable |
+| **TCP throughput** (iperf3, 1 stream) | 669 Mbps | 687 Mbps | none measurable |
+| **UDP delivered** (1 Gbps offered) | 957 Mbps @ 4.3 % loss | 972 Mbps @ 2.7 % loss | none measurable |
+| **UDP ceiling** (`-b 0`) | 1396 Mbps @ 60 % loss | 1318 Mbps @ 62 % loss | none measurable |
+| **Bulk transfer, 1 GB** | 1075 Mbps | 1029 Mbps | 4.3 % |
 | **Handshake over real WAN** (Mumbai VPS) | 203 ms | 327 ms | 1.61× (+124 ms) |
 | **…resumed** | 152.9 ms | 200.0 ms | saves 72 ms |
 
 Larger certificates and key shares make the one-time handshake slower; **the data
-plane is unaffected** — TCP throughput now matches to 0.1 %, and the transfer sweep
-(1 KB → 1 GB, 42 transfers per mode, all SHA-256 verified) puts the two modes within
-1–4 % everywhere above 1 MB.
+plane is unaffected** — the transfer sweep (1 KB → 1 GB, 21 transfers per mode,
+all SHA-256 verified) puts the two modes within 6 % everywhere above 1 MB and
+within 4 % at 500 MB and 1 GB.
 
-The limits that *do* bite are architectural, not cryptographic, and both were
-measured for the first time in this run:
+> **Two figures in this table are corrections rather than refreshes.** The UDP
+> row previously read "999.9 Mbps, 0 %" in both modes: that was the rate the
+> client *transmitted*, not the rate that arrived, and the tunnel was never
+> lossless. And the handshake ratio moved from 1.79× to 1.54× with no code
+> change — absolute handshake times on this desktop swing by about 20 % between
+> identical runs, so the honest reading is "about 1.5–1.8×".
 
-- **Latency collapses under load** — 1.2 ms idle → 17–31 ms while the tunnel is
+The limits that *do* bite are architectural, not cryptographic:
+
+- **A single TCP stream already saturates the relay** at ~670 Mbps; two, four and
+  eight parallel streams add nothing. The ceiling is the Python relay, not OpenSSL.
+- **Latency collapses under load** — 1.3 ms idle → 21–31 ms while the tunnel is
   saturated.
-- **Throughput falls as clients are added** — 715 → 670 → 459 Mbps total for 1, 2
-  and 3 concurrent clients. The server demultiplexes every client through one shared
-  TUN reader, and that is the bottleneck.
+- **Throughput falls as clients are added** — 655 → 373 → 370 Mbps total for 1, 2
+  and 3 concurrent clients, a 44 % loss. The server demultiplexes every client
+  through one shared TUN reader, and that is the bottleneck.
 
-Two parallel streams saturate the relay at ~1 Gbps and four or eight add nothing,
-confirming the ceiling is the Python relay rather than OpenSSL. Absolute handshake
-times on this desktop vary with load — the **ratio** between modes is the stable
-result, so the figures above pool several repetitions and `docs/BENCHMARKS.md` states
-the spread. Methodology, raw CSVs and plots: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+Methodology, raw CSVs, plots and the two corrections above in full:
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## Project structure
 

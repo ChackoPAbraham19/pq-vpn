@@ -1,3 +1,10 @@
-mode,protocol,mbps
-classical,tcp,635.15
-classical,udp,999.9
+mode,protocol,rep,mbps,loss_pct
+classical,tcp,1,636.84,
+classical,tcp,2,677.85,
+classical,tcp,3,669.11,
+classical,udp_1000m,1,957.06,4.28
+classical,udp_1000m,2,969.96,2.99
+classical,udp_1000m,3,950.00,4.98
+classical,udp_max,1,1462.93,59.91
+classical,udp_max,2,1396.49,60.16
+classical,udp_max,3,1348.34,59.33

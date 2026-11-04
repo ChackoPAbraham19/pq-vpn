@@ -1,2 +1,4 @@
-mode,min_ms,avg_ms,max_ms,mdev_ms
-pqc,0.693,1.146,3.275,0.244
+mode,rep,min_ms,avg_ms,max_ms,mdev_ms
+pqc,1,0.598,1.266,3.459,0.371
+pqc,2,0.834,1.361,4.917,0.582
+pqc,3,0.710,1.354,3.949,0.543

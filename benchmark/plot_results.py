@@ -3,6 +3,7 @@ import os
 import csv
 import sys
 import argparse
+import statistics
 from collections import defaultdict
 
 import matplotlib
@@ -39,30 +40,63 @@ def _read_resume(path: str) -> dict:
 
 
 def _read_latency(path: str) -> dict:
-    data = {}
+    """Pool repetitions: median of the per-run averages, with the true min/max.
+
+    Each row is one independent ping run. Averaging the averages would hide a
+    single bad run; the median does not, and min/max keep the extremes visible.
+    """
+    acc = defaultdict(lambda: {'min': [], 'avg': [], 'max': [], 'mdev': []})
     if not os.path.exists(path):
-        return data
+        return {}
     with open(path) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            data[row['mode']] = {
-                'min': float(row['min_ms']),
-                'avg': float(row['avg_ms']),
-                'max': float(row['max_ms']),
-                'mdev': float(row['mdev_ms']),
-            }
-    return data
+        for row in csv.DictReader(f):
+            for k, col in (('min', 'min_ms'), ('avg', 'avg_ms'),
+                           ('max', 'max_ms'), ('mdev', 'mdev_ms')):
+                if row.get(col):
+                    acc[row['mode']][k].append(float(row[col]))
+    out = {}
+    for mode, d in acc.items():
+        if not d['avg']:
+            continue
+        out[mode] = {
+            'min': min(d['min']) if d['min'] else 0.0,
+            'avg': statistics.median(d['avg']),
+            'max': max(d['max']) if d['max'] else 0.0,
+            'mdev': statistics.median(d['mdev']) if d['mdev'] else 0.0,
+            'avg_lo': min(d['avg']),
+            'avg_hi': max(d['avg']),
+            'n': len(d['avg']),
+        }
+    return out
 
 
 def _read_throughput(path: str) -> dict:
-    data = defaultdict(dict)
+    """{mode: {protocol: {median, lo, hi, loss, n}}}, pooling repetitions."""
+    acc = defaultdict(lambda: defaultdict(lambda: {'mbps': [], 'loss': []}))
     if not os.path.exists(path):
-        return data
+        return {}
     with open(path) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            data[row['mode']][row['protocol']] = float(row['mbps']) if row['mbps'] != '?' else 0
-    return data
+        for row in csv.DictReader(f):
+            v = row.get('mbps', '')
+            if not v or v == '?':
+                continue
+            cell = acc[row['mode']][row['protocol']]
+            cell['mbps'].append(float(v))
+            if row.get('loss_pct'):
+                cell['loss'].append(float(row['loss_pct']))
+    out = defaultdict(dict)
+    for mode, protos in acc.items():
+        for proto, cell in protos.items():
+            if not cell['mbps']:
+                continue
+            out[mode][proto] = {
+                'median': statistics.median(cell['mbps']),
+                'lo': min(cell['mbps']),
+                'hi': max(cell['mbps']),
+                'loss': statistics.median(cell['loss']) if cell['loss'] else None,
+                'n': len(cell['mbps']),
+            }
+    return out
 
 
 def _read_transfer_sweep(path: str) -> dict:
@@ -82,17 +116,18 @@ def _read_transfer_sweep(path: str) -> dict:
 
 
 def _read_scaling(path: str) -> dict:
-    """{test: {variant: value}} from scaling_<mode>.csv."""
-    out = defaultdict(dict)
+    """{test: {variant: [value, ...]}} from scaling_<mode>.csv, all repetitions."""
+    out = defaultdict(lambda: defaultdict(list))
     if not os.path.exists(path):
         return out
     with open(path) as f:
         for row in csv.DictReader(f):
-            if row.get('value'):
-                try:
-                    out[row['test']][row['variant']] = float(row['value'])
-                except ValueError:
-                    pass
+            if not row.get('value'):
+                continue
+            try:
+                out[row['test']][row['variant']].append(float(row['value']))
+            except ValueError:
+                pass
     return out
 
 
@@ -150,14 +185,23 @@ def _plot_latency(data: dict):
         ('max', [data[m]['max'] for m in modes], '#c44e52'),
     ]
     for i, (label, vals, color) in enumerate(metrics):
-        bars = ax.bar(x + i * width, vals, width, label=label, color=color, edgecolor='black')
+        # The avg bar carries a whisker across repetitions; min and max are
+        # already extremes, so an error bar on them would be meaningless.
+        err = None
+        if label == 'avg' and all('avg_lo' in data[m] for m in modes):
+            err = [[data[m]['avg'] - data[m]['avg_lo'] for m in modes],
+                   [data[m]['avg_hi'] - data[m]['avg'] for m in modes]]
+        bars = ax.bar(x + i * width, vals, width, label=label, color=color,
+                      edgecolor='black', yerr=err, capsize=4, ecolor='#333333')
         for bar, v in zip(bars, vals):
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
                     f'{v:.1f}', ha='center', va='bottom', fontsize=8)
     ax.set_xticks(x + width)
     ax.set_xticklabels(modes)
     ax.set_ylabel('RTT (ms)')
-    ax.set_title('Ping Latency Benchmark')
+    ax.margins(y=0.12)   # headroom, or the tallest bar's label is clipped
+    n = max((data[m].get('n', 1) for m in modes), default=1)
+    ax.set_title(f'Ping latency, idle tunnel (median of {n} runs x 100 pings)')
     ax.legend()
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -169,21 +213,42 @@ def _plot_latency(data: dict):
 def _plot_throughput(data: dict):
     if not data:
         return
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(9, 5))
     modes = list(data.keys())
     x = np.arange(len(modes))
-    width = 0.3
-    for i, proto in enumerate(['tcp', 'udp']):
-        vals = [data[m].get(proto, 0) for m in modes]
-        bars = ax.bar(x + i * width, vals, width, label=proto.upper(),
-                      color=['#4c72b0', '#dd8452'][i], edgecolor='black')
-        for bar, v in zip(bars, vals):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 5,
-                    f'{v:.1f}', ha='center', va='bottom', fontsize=8)
-    ax.set_xticks(x + width / 2)
+    # Only plot protocols actually present, so an older 2-column CSV still works.
+    order = [('tcp', 'TCP, 1 stream', '#4c72b0'),
+             ('udp_1000m', 'UDP, 1 Gbps offered', '#dd8452'),
+             ('udp_max', 'UDP, line rate (-b 0)', '#c44e52'),
+             ('udp', 'UDP', '#dd8452')]
+    protos = [t for t in order if any(t[0] in data[m] for m in modes)]
+    if ('udp_1000m', 'UDP, 1 Gbps offered', '#dd8452') in protos:
+        protos = [t for t in protos if t[0] != 'udp']
+    width = 0.8 / max(len(protos), 1)
+    for i, (key, label, color) in enumerate(protos):
+        vals, err_lo, err_hi = [], [], []
+        for m in modes:
+            cell = data[m].get(key)
+            v = cell['median'] if cell else 0.0
+            vals.append(v)
+            err_lo.append(v - cell['lo'] if cell else 0.0)
+            err_hi.append(cell['hi'] - v if cell else 0.0)
+        bars = ax.bar(x + i * width, vals, width, label=label, color=color,
+                      edgecolor='black', yerr=[err_lo, err_hi], capsize=4,
+                      ecolor='#333333')
+        for bar, v, m in zip(bars, vals, modes):
+            cell = data[m].get(key)
+            # A UDP rate without its loss is not interpretable, so print both.
+            txt = f'{v:.0f}'
+            if cell and cell.get('loss') is not None:
+                txt += f'\n{cell["loss"]:.0f}% lost'
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 8,
+                    txt, ha='center', va='bottom', fontsize=7.5)
+    ax.set_xticks(x + width * (len(protos) - 1) / 2)
     ax.set_xticklabels(modes)
     ax.set_ylabel('Throughput (Mbps)')
-    ax.set_title('Throughput Benchmark (iperf3)')
+    n = max((c['n'] for m in modes for c in data[m].values()), default=1)
+    ax.set_title(f'Throughput through the tunnel (median of {n} runs, bars show min-max)')
     ax.legend()
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -236,6 +301,40 @@ def _plot_transfer_sweep(by_mode: dict):
     print('  transfer_sweep.png')
 
 
+def _clients_verdict(has: dict) -> str:
+    """Same, for the concurrent-client series."""
+    ends = []
+    for d in has.values():
+        cl = d.get('clients', {})
+        if '1' in cl and '3' in cl:
+            ends.append(statistics.median(cl['3']) / statistics.median(cl['1']))
+    if not ends:
+        return 'Total throughput vs concurrent clients'
+    r = statistics.median(ends)
+    if r < 0.85:
+        return f'Total throughput FALLS as clients are added ({r:.2f}x at 3)'
+    if r > 1.15:
+        return f'Total throughput rises with clients ({r:.1f}x at 3)'
+    return 'Total throughput is flat as clients are added'
+
+
+def _streams_verdict(has: dict) -> str:
+    """Say what the parallel-stream series actually does, from the numbers."""
+    ends = []
+    for d in has.values():
+        ps = d.get('parallel_streams', {})
+        if '1' in ps and '8' in ps:
+            ends.append(statistics.median(ps['8']) / statistics.median(ps['1']))
+    if not ends:
+        return 'Throughput vs parallel TCP streams'
+    r = statistics.median(ends)
+    if r > 1.15:
+        return f'Parallel streams raise the ceiling ({r:.1f}x from 1 to 8)'
+    if r < 0.85:
+        return f'Parallel streams lower the ceiling ({r:.2f}x from 1 to 8)'
+    return 'A single stream already saturates the relay'
+
+
 def _plot_scaling(by_mode: dict):
     """Parallel streams and concurrent clients: does anything raise the ceiling?"""
     has = {k: v for k, v in by_mode.items() if v}
@@ -244,28 +343,39 @@ def _plot_scaling(by_mode: dict):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.6))
     colors = {'classical': '#4c72b0', 'pqc': '#dd8452'}
     drew = False
+    def series(ax, points, c, mode):
+        """Median line with a min-max band across repetitions."""
+        xs = sorted(points, key=lambda v: int(v))
+        xi = [int(x) for x in xs]
+        med = [statistics.median(points[x]) for x in xs]
+        ax.plot(xi, med, marker='o', color=c, label=mode)
+        lo = [min(points[x]) for x in xs]
+        hi = [max(points[x]) for x in xs]
+        if any(h > l for l, h in zip(lo, hi)):
+            ax.fill_between(xi, lo, hi, color=c, alpha=0.15, linewidth=0)
+
     for mode, d in has.items():
         c = colors.get(mode, '#555555')
         ps = d.get('parallel_streams', {})
         if ps:
-            xs = sorted(ps, key=lambda v: int(v))
-            ax1.plot([int(x) for x in xs], [ps[x] for x in xs],
-                     marker='o', color=c, label=mode)
+            series(ax1, ps, c, mode)
             drew = True
         cl = d.get('clients', {})
         if cl:
-            xs = sorted(cl, key=lambda v: int(v))
-            ax2.plot([int(x) for x in xs], [cl[x] for x in xs],
-                     marker='o', color=c, label=mode)
+            series(ax2, cl, c, mode)
             drew = True
     if not drew:
         plt.close(fig)
         return
     ax1.set_xlabel('Parallel TCP streams')
-    ax1.set_title('Two streams saturate the relay; more does not help')
+    # Title derived from the data, not asserted. An earlier run showed 759 ->
+    # 1010 Mbps from 1 to 8 streams and the title said so; a later run with
+    # repetitions showed the series flat, and a hardcoded title would have
+    # kept claiming a rise the plot underneath it no longer showed.
+    ax1.set_title(_streams_verdict(has))
     ax1.set_xticks([1, 2, 4, 8])
     ax2.set_xlabel('Concurrent clients')
-    ax2.set_title('Total throughput FALLS as clients are added')
+    ax2.set_title(_clients_verdict(has))
     ax2.set_xticks([1, 2, 3])
     for ax in (ax1, ax2):
         ax.set_ylabel('Total throughput (Mbps)')
@@ -407,6 +517,11 @@ def main():
                         help=f'Results directory (default: {RESULTS_DIR})')
     args = parser.parse_args()
 
+    # Plots belong next to the CSVs they were made from. Without this, --dir
+    # read one directory and wrote into another -- so a --quick run would
+    # silently refresh the PUBLISHED plots from unrelated data.
+    global OUT_DIR
+    OUT_DIR = os.path.join(os.path.abspath(args.dir), 'plots')
     os.makedirs(OUT_DIR, exist_ok=True)
 
     print('Reading results...')

@@ -4,7 +4,7 @@ classical,full,<<<,ServerHello,122
 classical,full,<<<,EncryptedExtensions,6
 classical,full,<<<,CertificateRequest,121
 classical,full,<<<,Certificate,882
-classical,full,<<<,CertificateVerify,79
+classical,full,<<<,CertificateVerify,80
 classical,full,<<<,Finished,52
 classical,full,>>>,Certificate,980
 classical,full,>>>,CertificateVerify,78
@@ -33,4 +33,3 @@ pqc,resumed,<<<,ServerHello,1216
 pqc,resumed,<<<,EncryptedExtensions,6
 pqc,resumed,<<<,Finished,52
 pqc,resumed,>>>,Finished,52
-pqc,resumed,<<<,NewSessionTicket,5833
