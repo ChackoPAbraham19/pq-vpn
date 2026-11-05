@@ -314,12 +314,30 @@ def test_token_embedded_for_loopback():
 
 
 def test_profile_listing():
-    """Profile names come from client/config*.yaml, excluding the examples."""
+    """Profile names come from client/config*.yaml, excluding the examples.
+
+    What is expected is derived from the files actually present, never named
+    literally. The earlier version asserted that 'vps' was discovered, but
+    client/config-vps.yaml is gitignored -- it holds a real public IP -- so it
+    exists on a machine that has deployed to the VPS and in no clean checkout.
+    That check passed for every developer and failed in CI on every push.
+    """
+    import glob
     import dashboard.dashboard_server as ds
 
     names = ds.available_profiles()
+    client_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'client')
+    on_disk = {os.path.basename(p)[len('config-'):-len('.yaml')]
+               for p in glob.glob(os.path.join(client_dir, 'config-*.yaml'))
+               if not p.endswith('.example.yaml')}
+
     test('the bare default is offered first', names and names[0] == '', str(names[:3]))
-    test('named profiles are discovered', 'vps' in names and 'pqc' in names, str(names))
+    # Equality both ways: nothing on disk is missed, nothing is invented. It
+    # also covers "named profiles are discovered", since config-pqc.yaml is
+    # tracked and so is in on_disk in every checkout.
+    test('every config-*.yaml in client/ is offered, and only those',
+         bool(on_disk) and set(names) - {''} == on_disk,
+         f'offered={sorted(names)} on_disk={sorted(on_disk)}')
     test('example templates are not offered as profiles',
          not any('example' in n for n in names), str(names))
 

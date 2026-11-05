@@ -117,7 +117,13 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
         rc=0; out=$("$PY" "$t" 2>&1) || rc=$?
         last=$(echo "$out" | tail -1 | sed 's/^ *//')
         echo "    $(basename "$t"): ${last} (rc=$rc)"
-        [[ $rc -ne 0 ]] && fail=1
+        # On failure, print the checks that failed. Without this the only
+        # evidence a CI container leaves behind is "57/58 passed", which names
+        # neither the check nor its detail line and cannot be acted on.
+        if [[ $rc -ne 0 ]]; then
+            fail=1
+            echo "$out" | grep -A1 '✗' | sed 's/^/      /'
+        fi
     done
     [[ $fail -ne 0 ]] && { echo "    SOME TESTS FAILED" >&2; exit 1; }
     echo ""
