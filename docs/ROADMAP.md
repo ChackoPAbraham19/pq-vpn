@@ -162,6 +162,17 @@ unambiguous vs tunnel data.
   (`--token` / `$PQVPN_DASH_TOKEN` / printed random), which also closes CSRF via
   the CORS preflight; `lifespan` replaces `on_event`; UI shows every client
   instance, aggregate throughput, and per-tunnel rates. Tests 25/25.
+- Control mode (2026-11, after Phase 7): `pqvpn dashboard --control` re-execs
+  under sudo and enables `POST /connect` / `POST /down`, which shell out to
+  `cli/vpnctl.py` so the buttons and the CLI cannot diverge. On a loopback bind
+  the action token is embedded in the page, so there is nothing to copy; a
+  non-loopback bind embeds nothing and still requires it by hand. The page was
+  rebuilt around state: the headline says *Quantum-safe* or *Connected* rather
+  than calling both "secure", and a light theme follows the system preference.
+  Two faults were found and fixed in the process — a `ReferenceError` that made
+  every Connect click a no-op, and control mode being attached only to
+  `GET /api/status`, which the page never reads. Tests 58/58 and now cover the
+  page's own JavaScript. See `docs/PROJECT_REPORT.md` §14.
 
 ### Phase 6 — Report + demo
 - `docs/BENCHMARKS.md`: compiled report over the raw CSVs (full handshake,

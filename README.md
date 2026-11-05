@@ -192,18 +192,21 @@ VPN/
 ├── scripts/      install_custom_openssl.sh, setup_routing.sh (netns), demo.sh, clean_build_check.sh, deploy_vps.sh
 ├── deploy/       pqvpn-server.service (systemd)
 ├── benchmark/    bench scripts (loopback + real-WAN), raw results/*.csv (tracked), plots
-├── docs/         architecture, BENCHMARKS, DEPLOYMENT, setup, ROADMAP
+├── docs/         PROJECT_REPORT, architecture, BENCHMARKS, DEPLOYMENT, setup, ROADMAP
 └── Dockerfile    clean-build proof from ubuntu:24.04
 ```
 
 ## Limitations (honest list)
 
-- **Python prototype**: throughput tops out around 1 Gbps because of the Python relay
-  and pipe copies, not the crypto — two parallel streams saturate it and more add
-  nothing.
-- **Degrades under load and with clients**: latency goes from ~1.2 ms idle to 17–31 ms
-  saturated, and *total* throughput falls from 715 to 459 Mbps as clients go 1 → 3.
-  One shared TUN reader serves every client.
+- **Python prototype**: the ceiling is the single-threaded relay and its pipe copies,
+  not the crypto. One iperf3 TCP stream already reaches it at ~670 Mbps and two, four
+  and eight add nothing; bulk transfer sustains ~1.07 Gbps. (An earlier revision said
+  *two* streams saturate it, from four unrepeated samples; repeating each point three
+  times gives a flat series.)
+- **Degrades under load and with clients**: latency goes from ~1.3 ms idle to 21–31 ms
+  saturated, and *total* throughput falls from 655 to 370 Mbps as clients go 1 → 3 —
+  44 % less data from three clients than from one. One shared TUN reader serves every
+  client.
 - **Session resumption is per-server-process**: each client gets a fresh `s_server`,
   which regenerates ticket keys, so tickets resume within a benchmark but not across
   daemon restarts. Status reports `resumed` only on hard evidence.
@@ -212,9 +215,14 @@ VPN/
   limit) but a distributed flood could still fill 3 slots.
 - **Revocation is a file** (`crl.pem`, read per new session) — no OCSP / CRL
   distribution points.
-- **Tested on one machine** (netns) and in Docker; the real-internet VPS run is the
-  remaining roadmap item — [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) and
-  `scripts/deploy_vps.sh` are ready for it.
+- **The data plane is measured on one machine** (the netns harness) and in Docker.
+  The real-internet run against an AWS Lightsail VPS covered the handshake, egress and
+  DNS — see the WAN rows above — but WAN latency and throughput were never measured,
+  and the WAN handshake timing used a bare OpenSSL server rather than the full daemon.
+- **Absolute timings are not a controlled comparison of the primitives**: the two modes
+  use different OpenSSL builds (3.0.13 system, 3.4.7-dev custom) and the host is an
+  interactive desktop. Seven repeats of one handshake spanned 26.7–32.3 ms unchanged,
+  which is why ratios are quoted and single runs are not.
 
 ## Prerequisites
 

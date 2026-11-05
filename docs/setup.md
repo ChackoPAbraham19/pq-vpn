@@ -17,9 +17,9 @@ bash scripts/clean_build_check.sh --live   # additionally run the netns demo in 
 
 Measured 2026-09-16 on a laptop, cold cache: apt 231 s, OpenSSL 3.4.7 + liboqs 0.15.0
 + oqs-provider 0.11.0 build 190 s, runtime deps + venv + PKI ~130 s. Inside the
-image: 126/126 unit tests, real handshake bench (classical ~15 ms, PQC ~80 ms median
-under Docker), and with `--live` a 2-client PQC tunnel over netns at 0 % loss and
-500–890 Mbit/s. The clean build surfaced seven portability bugs on this machine
+image: 207/207 unit checks, a real handshake bench (classical ~17 ms, PQC ~79 ms
+median under Docker — slower than the host figures in `BENCHMARKS.md`, which is
+expected), and with `--live` a 2-client PQC tunnel over netns. The clean build surfaced seven portability bugs on this machine
 that the laptop had been masking (see the `feat(build)` commit message).
 
 The `Dockerfile` runs the same `scripts/install_custom_openssl.sh` a VPS would,
@@ -29,7 +29,16 @@ script falls back to `docker build --network=host` when bridge-mode containers
 have no egress (typical with ufw's default FORWARD policy).
 
 The same check runs in GitHub Actions on every push (`.github/workflows/clean-build.yml`);
-the README badge reflects the latest result.
+the README badge reflects the latest result. It is a *clean checkout*, which is
+not the same thing as your working tree: files that are gitignored — notably
+`client/config-vps.yaml` and `server/config-vps.yaml`, which hold a real public
+IP — simply are not there. A test that named the `vps` profile therefore passed
+for everyone who had deployed and failed in CI on every push. If CI disagrees
+with your machine, reproduce it the way CI sees it:
+
+```bash
+git archive HEAD | tar -x -C /tmp/clean && ls /tmp/clean/client/*.yaml
+```
 
 ## Step 1: System Dependencies
 
@@ -208,12 +217,26 @@ key exchange). These fields reset on every reconnect attempt — no stale values
 ## Step 10: Web Dashboard (Optional)
 
 ```bash
-.venv/bin/python3 dashboard/dashboard_server.py            # http://127.0.0.1:8080
+pqvpn dashboard                     # http://127.0.0.1:8080, read-only, no root
+pqvpn dashboard --control           # ...plus working Connect/Disconnect (asks for sudo once)
+pqvpn dashboard --port N --token T  # override either
 ```
 
-Panels: throughput chart, handshake-mode indicator, tunnel table with kick
-buttons (POST /disconnect/{id}), event log. Polls `/tmp/pqvpn-*.sock` every
-0.5s; state flips reach the browser in <1s.
+`.venv/bin/python3 dashboard/dashboard_server.py` is the same server if you
+prefer to invoke it directly; `pqvpn dashboard` adds free-port probing and the
+privilege handling.
+
+The page opens on the tunnel's state, the controls and the negotiated suite,
+then aggregate throughput over the last 60 s, a per-tunnel table with sparklines
+and a Disconnect action, the client daemons on this host, and an event log. It
+polls `/tmp/pqvpn-*.sock` every 0.5 s through a single background poller, so
+state flips reach every open tab in under a second and extra tabs cost nothing.
+
+Actions carry a token in an `X-PQVPN-Token` header. Bound to loopback, the
+server embeds its own token in the page and there is nothing to copy. Bound to
+anything else, the field must be filled in by hand — that is when the token is
+the only guard. `--control` works only as root, because bringing a tunnel up
+needs TUN, routes and DNS; without it the buttons render disabled and say so.
 
 ## Step 11: Run Benchmarks
 

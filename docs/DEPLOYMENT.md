@@ -98,11 +98,13 @@ Verify:
 ```bash
 sudo ip netns exec vpn_ns2 ping -c5 10.8.0.1          # tunnel up
 .venv/bin/python3 cli/vpnctl.py status                # session state, resumed flag
-.venv/bin/python3 dashboard/dashboard_server.py &     # optional dashboard UI (http://127.0.0.1:8080)
-# It prints a one-time token; paste it into the page's "token" box to enable
-# kick/rekey. Set PQVPN_DASH_TOKEN or --token for a stable one. Keep the
-# dashboard on 127.0.0.1 unless you have set a token — status is readable by
-# anyone who can reach the port.
+pqvpn dashboard &                                     # optional dashboard UI (http://127.0.0.1:8080)
+# Bound to loopback it embeds its own action token in the page, so there is
+# nothing to paste. Set PQVPN_DASH_TOKEN or --token for a stable one, which you
+# need if you bind it anywhere else: a non-loopback bind embeds nothing and the
+# token must be typed in, because there it is the only guard on actions. Status
+# itself is readable by anyone who can reach the port, so keep it on 127.0.0.1.
+# Add --control (root) for working Connect/Disconnect buttons.
 ```
 
 ## 6. VPS deployment (Phase 7)

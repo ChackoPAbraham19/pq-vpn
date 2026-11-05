@@ -103,13 +103,13 @@ no longer exported.
 
 | Path | Lines | Responsibility |
 |---|---|---|
+| `cli/vpnctl.py` | 571 | Control CLI over Unix-socket IPC, plus the dashboard launcher and its privilege checks |
+| `server/vpn_server.py` | 478 | Server daemon: welcome accept loop, per-client TLS processes, shared TUN demux, idle and stale-handshake reaping, IPC commands |
 | `client/vpn_client.py` | 460 | Client daemon: welcome handshake, TLS session, TUN setup, relay threads, keepalive, reconnect supervisor |
-| `server/vpn_server.py` | 426 | Server daemon: welcome accept loop, per-client TLS processes, shared TUN demux, idle and stale-handshake reaping, IPC commands |
+| `dashboard/dashboard_server.py` | 362 | FastAPI status API, WebSocket stream, token-guarded actions, control-mode Connect/Disconnect |
 | `server/session_manager.py` | 358 | IP pool, slot-to-port binding, `ClientSession` lifecycle, welcome rate limiter |
-| `cli/vpnctl.py` | 350 | Control CLI over Unix-socket IPC |
-| `client/net_config.py` | 280 | Client routing and DNS: half-routes, transport-protection route, IPv6 guard, `resolvectl`/`resolv.conf` |
+| `client/net_config.py` | 345 | Client routing and DNS: half-routes, transport-protection route, IPv6 guard, `resolvectl`/`resolv.conf` |
 | `common/daemon_utils.py` | 248 | `StatusTracker`, `IpcServer`, socket and PID paths shared by both daemons |
-| `dashboard/dashboard_server.py` | 211 | FastAPI status API, WebSocket stream, token-guarded actions |
 | `server/net_config.py` | 188 | Server networking: NAT, forwarding, MSS clamp, dnsmasq |
 | `common/openssl_wrapper.py` | 136 | Builds and spawns the `s_server` / `s_client` command lines per mode |
 | `common/framing.py` | 108 | Wire format and its helpers |
@@ -323,18 +323,33 @@ timer and the rate limiter rather than eliminated. The client's hello name is
 |---|---|
 | `up [profile]` | Connect by profile name (`vps`, `pqc`), waiting until routing is actually live, then report the negotiated crypto and the new public IP |
 | `down` | Disconnect and restore routes and DNS |
-| `dashboard [--vps]` | Open the live web dashboard, locally or over an SSH forward to a deployed server. Runs unprivileged. |
+| `dashboard [--vps] [--control]` | Open the live web dashboard, locally or over an SSH forward to a deployed server. Unprivileged by default; `--control` re-execs under sudo and enables Connect/Disconnect in the page. |
 | `connect` | Start a daemon, auto-detecting server or client from the config |
 | `connect-server` / `connect-client` | Start a specific role |
 | `status [role]` | Mode, state, negotiated cryptography, tunnel address, session and daemon uptime, byte counters, per-client table |
 | `disconnect` | Stop the server and every client instance |
 | `disconnect-client <name>` | End the session(s) of one named client |
 
-**Dashboard** (`dashboard/`) — FastAPI with a WebSocket stream. It leads with the
-cryptographic suite actually negotiated for the session, then live aggregate
-throughput, a per-tunnel table with sparklines and rates, the client daemons on
-the host, and an event log. Mutating actions require a token header. One
-background poller feeds every browser, so extra tabs cost nothing.
+**Dashboard** (`dashboard/`) — FastAPI with a WebSocket stream. The page opens
+on the tunnel's state, the Connect and Disconnect controls and the cryptographic
+suite actually negotiated for the session, then live aggregate throughput, a
+per-tunnel table with sparklines and rates, the client daemons on the host, and
+an event log. The headline distinguishes the two modes rather than calling both
+"secure": a post-quantum handshake reads *Quantum-safe*, a classical one reads
+*Connected*.
+
+One background poller feeds every reader, so extra tabs cost nothing. Both
+readers — the WebSocket the page consumes and `GET /api/status` — decorate that
+cached snapshot through a single `with_control()` helper, because they must
+agree on whether control mode is on. They did not always: the mode was attached
+only to `/api/status`, which the page never calls, so Connect and Disconnect sat
+disabled even when the server was running with `--control` (§14).
+
+Mutating actions (`POST /connect`, `/down`, `/disconnect/{id}`, `/rekey`) require
+the token header. On a loopback bind the server embeds its own token in the page,
+so there is nothing to copy; reading it still requires same-origin JavaScript, so
+a cross-origin POST arrives without the header and is refused as before. A
+non-loopback bind embeds nothing, because there the token is the only guard.
 
 It reads Unix sockets, so **it only sees daemons on the machine it runs on**:
 run it on the client to see the client's view, or on the server (reached over an
@@ -851,12 +866,17 @@ code, and each is fixed in the repository.
 | Seven portability bugs (missing `LD_LIBRARY_PATH`, unpinned upstream branches, library path unreachable without `ldconfig`, no default `openssl.cnf`, `sudo` assumed present, PKI scripts entering an ignored directory, a v1 CA certificate rejected by released OpenSSL) | The development laptop had accumulated state that masked each one | Found by building from bare `ubuntu:24.04` in Docker; all fixed in the install and PKI scripts |
 | Resumption benchmark reported "no successful trials" | `--resume` ignored `--out-dir`, writing the session ticket into a directory it never created, so priming failed and every resumed trial silently fell back to a full handshake | Honour `--out-dir`, create it first |
 | An idle client kept reporting "connected" after the server tore its session down | The TUN-to-TLS thread only noticed a dead peer on its next write, which on an idle tunnel never came | A per-session stop event set when the TLS side closes, cascading to the other threads |
+| Connect and Disconnect in the dashboard did nothing, with `--control` passed and the server in control mode | Two faults in sequence. First, `control()` called `headers()`, which did not exist — `headers` was a local inside `disconnect()` — so every click raised `ReferenceError` before `fetch`. Then, with that fixed, the page still rendered the controls disabled: it learns the mode from the `/ws/status` snapshot, and the mode was attached only to `GET /api/status`, which the page never calls | One shared `authHeaders()` used by both call sites, and one `with_control()` helper that both readers decorate through. Regression tests cover each: the page's own script is executed with stubbed browser globals, and the WebSocket frame is asserted to carry the mode |
+| The clean-build workflow failed on every push for three weeks, while all 207 checks passed on every developer machine | One check asserted that the `vps` profile is discovered. `client/config-vps.yaml` is gitignored — it holds the VPS's real public IP — so it exists wherever someone has deployed and in no clean checkout | Derive the expected profiles from the files actually present and compare both ways. Reproduced first in the clean-build image, where deleting that one file turned 58/58 into 57/58 and the dry-run into the CI log verbatim |
 
 A recurring lesson runs through these: **a system can look healthy on the
 signal you happen to be watching.** ICMP answered while DNS was blocked; pings
 crossed the tunnel while real traffic bypassed it; a client reported connected
-while the server had already forgotten it. Each was caught by checking a
-different signal than the obvious one.
+while the server had already forgotten it; a test suite was green on every
+machine that had deployed the system and red on every machine that had not.
+Each was caught by checking a different signal than the obvious one — and the
+last two were caught only because something outside the developer's machine
+was watching.
 
 ---
 

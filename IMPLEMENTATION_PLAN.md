@@ -1,5 +1,13 @@
 # Post-Quantum Secure VPN — Implementation Plan
 
+> **This is the original plan, kept for provenance.** It records what was
+> intended before anything was built, which is why it is worth keeping and why
+> nothing here should be read as a description of the system as it stands. For
+> that, see [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md) (what was built
+> and what it measures), [`docs/ROADMAP.md`](docs/ROADMAP.md) (what each phase
+> actually delivered) and [`TODO.md`](TODO.md) (dated record of every verified
+> run). Where this plan and those disagree, they are right.
+
 **Project type:** Major Project — Client + Server VPN prototype with PQC integration, benchmarking, and UI
 **Target OS:** Linux (Ubuntu 22.04 / 24.04)
 **Core crypto stack:** liboqs + oqs-provider (OpenSSL 3.x) — ML-KEM (Kyber) KEM, ML-DSA (Dilithium) signatures

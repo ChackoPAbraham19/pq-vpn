@@ -337,3 +337,50 @@ misleading and the diagnosis is worth not repeating.
       `-provider oqsprovider -provider default`. Worth folding into
       `scripts/diagnose_tunnel.sh`.
 
+
+## Dashboard control mode: two faults, and what hid each one [2026-11-04/05]
+
+- [x] **`--control` existed and did nothing.** `index.html` called `headers()`,
+      which was never defined — `headers` was a `const` *inside* `disconnect()`
+      — so every Connect and Disconnect click raised `ReferenceError` before
+      `fetch` was reached. Green suite throughout: the only test touching the
+      page asserted it was *served*, never that its JavaScript ran.
+- [x] **Fixed, and the buttons were still dead.** The page learns the mode from
+      the `/ws/status` snapshot and reads nothing else; `control` and `profiles`
+      were attached only in `GET /api/status`. So every frame set
+      `controlEnabled = !!undefined`, the controls rendered disabled, and the
+      page told an operator who had just passed `--control` to restart with
+      `--control`. Both readers now decorate through one `with_control()`.
+- [x] **Regression tests for each.** The page's own script is executed with
+      stubbed browser globals (proven by reintroducing the bug: "Connect made no
+      request at all"), and the WebSocket frame is asserted to carry the mode —
+      5/5 of those fail with the fix reverted. Suites 193 → 207.
+- [x] **Token typing removed without weakening the guard.** A loopback bind
+      embeds the token in the page; a non-loopback bind embeds nothing. This is
+      stricter than what it replaced, since `scripts/dashboard.sh` had defaulted
+      the token to the literal string `demo`.
+- [ ] Watch: the control path has been proven end to end only as far as
+      `vpnctl`'s own "connecting needs root" refusal, driven against a live
+      server with the token scraped from the page exactly as the browser does.
+      Driving a real tunnel up from the button needs one run of
+      `sudo pqvpn dashboard --control`.
+
+## CI was red for three weeks for a reason no developer could see [2026-11-05]
+
+- [x] **One check, failing only in a clean checkout.** `test_profile_listing`
+      asserted that the `vps` profile is discovered, but `client/config-vps.yaml`
+      is gitignored — it holds the VPS's real public IP — so it exists on any
+      machine that has deployed and in no CI checkout. Green for every
+      developer, red on every push since `e0ab505`.
+- [x] **Reproduced before fixing.** Built the clean-build image and deleted that
+      one file: 58/58 became 57/58, and the dry-run became 92/36/7/14/57, which
+      is the CI log verbatim. Expectations are now derived from the files
+      actually on disk and compared both ways.
+- [x] **`demo.sh` now prints which check failed.** The only evidence CI left was
+      `57/58 passed`, naming neither the check nor its detail line. It now
+      prints the `✗` lines and their detail under the suite summary.
+- [ ] Watch: any test that names a specific config file is at risk of this.
+      `server/config-vps.yaml` is gitignored for the same reason. The general
+      rule is to derive expectations from what is present rather than to name
+      files, and to check CI's view with
+      `git archive HEAD | tar -x -C /tmp/clean`.
