@@ -364,7 +364,7 @@ image. `.github/workflows/clean-build.yml` runs the same thing on every push.
 
 Three independent layers.
 
-**Unit suites — 193 checks across five files.** Most drive *real* `openssl`
+**Unit suites — 207 checks across five files.** Most drive *real* `openssl`
 processes rather than mocks, so they test the actual integration:
 
 | Suite | Checks | Covers |
@@ -373,7 +373,7 @@ processes rather than mocks, so they test the actual integration:
 | `common/test_net_config.py` | 36 | NAT rule construction, MSS clamp, route protection and restoration, IPv6 guard, DNS fallback, safe TUN teardown |
 | `common/test_keepalive.py` | 7 | Backoff growth, idle detection, keepalive behaviour, session-stop cascade |
 | `common/test_resumption.py` | 14 | Ticket cache paths, atomic rotation, wrapper flags, real OpenSSL prime-then-`Reused` |
-| `dashboard/test_dashboard.py` | 44 | IPC envelope compatibility, endpoints, token auth (401/503), single-poller behaviour, WebSocket delivery |
+| `dashboard/test_dashboard.py` | 58 | IPC envelope compatibility, endpoints, token auth (401/503), control-mode gating on both readers, page auth wiring, single-poller behaviour, WebSocket delivery |
 
 **Clean-build check.** The Docker image proves the documented installation works
 on a machine with no prior state. This caught seven portability bugs the
@@ -396,7 +396,7 @@ inside the network namespace harness; real-WAN measurements from a laptop in
 India to an AWS Lightsail instance in `ap-south-1` (Mumbai).
 
 **Everything in §12.1–§12.5 and §12.8 comes from a single run on 2026-11-04**
-(`sudo bash scripts/run_all_benchmarks.sh`, about nine minutes), so those tables
+(`sudo bash scripts/run_all_benchmarks.sh`, about 17 minutes), so those tables
 may be compared with one another — which earlier revisions of this report had to
 warn against, because the figures were stitched together from three different
 days. Only the WAN results (§12.6) are from a separate, earlier session. Classical mode uses the system
@@ -946,7 +946,7 @@ sudo bash scripts/demo.sh --mode pqc --clients 2 --egress
 bash scripts/demo.sh --dry-run --mode pqc
 ```
 
-Runs all 193 checks plus a real handshake benchmark in both modes.
+Runs all 207 checks plus a real handshake benchmark in both modes.
 
 ### In Docker, from a bare image
 

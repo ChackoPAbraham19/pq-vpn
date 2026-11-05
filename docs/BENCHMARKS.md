@@ -480,7 +480,7 @@ compiled, multi-queue relay listed under Future Work.
 
 ## Validation
 
-`bash scripts/demo.sh --dry-run` runs five suites — **193 checks**:
+`bash scripts/demo.sh --dry-run` runs five suites — **207 checks**:
 
 | Suite | Checks | Covers |
 |-------|--------|--------|
@@ -488,7 +488,7 @@ compiled, multi-queue relay listed under Future Work.
 | `common/test_net_config.py` | 36 | NAT, MSS clamp, route protection/restore, IPv6 guard, DNS fallback |
 | `common/test_keepalive.py` | 7 | keepalive, idle detection, backoff, session-stop cascade |
 | `common/test_resumption.py` | 14 | ticket cache, wrapper flags, real OpenSSL prime→`Reused` |
-| `dashboard/test_dashboard.py` | 44 | IPC envelope, endpoints, token auth, single poller, WS |
+| `dashboard/test_dashboard.py` | 58 | IPC envelope, endpoints, token auth, single poller, WS |
 
 ## Interpretation
 

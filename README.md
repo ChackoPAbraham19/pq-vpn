@@ -79,7 +79,7 @@ works.
 
 ## What's implemented
 
-Everything below is exercised by the unit suites (**193 tests**, `demo.sh --dry-run`) and
+Everything below is exercised by the unit suites (**207 tests**, `demo.sh --dry-run`) and
 was verified live in the network-namespace harness with 2–3 concurrent PQC clients.
 
 - **Dual-mode PKI** — ECDSA P-256 chain and ML-DSA-65 chain, both with mutual TLS.
