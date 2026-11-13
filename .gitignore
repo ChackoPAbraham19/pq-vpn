@@ -2,8 +2,8 @@
 pki/certs/
 
 # TLS session tickets written by `s_client -sess_out`. These are SSL SESSION
-# PARAMETERS blobs — key material, not results. Two of them reached the public
-# repo once via `git add -A`; this rule keeps that from recurring.
+# PARAMETERS blobs — key material, not results. Two of them were committed once
+# via `git add -A` (since purged from history); this rule keeps that from recurring.
 *.tick
 
 # Benchmark raw data IS tracked: every table in docs/BENCHMARKS.md must be
@@ -40,6 +40,15 @@ graphify-out/
 
 # Lock files
 .~lock.*
+
+# Presentation decks, viva notes and stray images kept in the working tree.
+# Not part of the program; ignored so `git add -A` cannot sweep them in.
+*.pptx
+/*.pdf
+/PQ-VPN-Viva-Question-Bank.html
+/*.jpeg
+/*.jpg
+
 # VPS deployment config (contains the real public IP / NIC)
 server/config-vps.yaml
 client/config-vps.yaml

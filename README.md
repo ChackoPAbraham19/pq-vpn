@@ -134,6 +134,8 @@ was verified live in the network-namespace harness with 2–3 concurrent PQC cli
 (`/opt/openssl-pqc`). Full detail in [`docs/architecture.md`](docs/architecture.md);
 a single self-contained write-up of the whole project — design, implementation,
 results and findings — is in [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md).
+For a file-by-file walk through the repository — what every file does and which
+one to open for a given question — see [`docs/FILE_GUIDE.md`](docs/FILE_GUIDE.md).
 
 ## Benchmarks
 
@@ -192,8 +194,9 @@ VPN/
 ├── scripts/      install_custom_openssl.sh, setup_routing.sh (netns), demo.sh, clean_build_check.sh, deploy_vps.sh
 ├── deploy/       pqvpn-server.service (systemd)
 ├── benchmark/    bench scripts (loopback + real-WAN), raw results/*.csv (tracked), plots
-├── docs/         PROJECT_REPORT, architecture, BENCHMARKS, DEPLOYMENT, setup, ROADMAP
-└── Dockerfile    clean-build proof from ubuntu:24.04
+├── docs/         PROJECT_REPORT, architecture, BENCHMARKS, DEPLOYMENT, setup, ROADMAP, FILE_GUIDE
+├── Dockerfile    clean-build proof from ubuntu:24.04
+└── LICENSE       MIT
 ```
 
 ## Limitations (honest list)
@@ -228,6 +231,10 @@ VPN/
 
 Ubuntu 24.04 (or 22.04), Python 3.12, root for TUN/netns, `build-essential cmake
 ninja-build libssl-dev`, `iperf3` for throughput benchmarks, Docker optional.
+
+## License
+
+[MIT](LICENSE).
 
 ## References
 

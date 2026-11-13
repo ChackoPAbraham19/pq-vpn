@@ -220,22 +220,22 @@
 
 ## Repo hygiene [completed 2026-09-24]
 - [x] Raw benchmark CSVs are now tracked (14 files) so every table in BENCHMARKS.md is independently reproducible from the repo; added the one-liners that recompute them
-- [x] Removed two tracked TLS session tickets (`benchmark/results/wan_*.tick`, `SSL SESSION PARAMETERS` blobs) that reached the public repo via `git add -A` in 0763a86. Both benchmark scripts now write tickets to a temp dir and delete them; `*.tick` is git-ignored
-- [ ] Optional: the two ticket blobs remain in pushed history. Purging needs `git filter-repo` + force-push (rewrites every hash). Low value — they are dead tickets for throwaway benchmark servers, unrelated to the daemon keys in the ignored `pki/certs/` — so deferred rather than done before the demo
+- [x] Removed two tracked TLS session tickets (`benchmark/results/wan_*.tick`, `SSL SESSION PARAMETERS` blobs) that were committed and pushed via `git add -A` (in the first real-WAN benchmark commit). Both benchmark scripts now write tickets to a temp dir and delete them; `*.tick` is git-ignored
+- [x] Purged from history (2026-11-13), before the repository was made public: `git filter-repo` removed both ticket blobs from every commit, replaced the VPS's real public IP with the documentation address `203.0.113.5`, and moved the commit author email to the GitHub noreply address. Every commit hash changed, so hashes quoted anywhere before this date no longer resolve. The tickets were dead ones for throwaway benchmark servers, unrelated to the daemon keys in the ignored `pki/certs/`
 
 ## Phase 7b: Capstone — run on a real VPS [in progress]
-- [x] AWS Lightsail 1 GB Ubuntu 24.04 (ap-south-1, static IP 203.0.113.5) + 2 GB swap; `bash scripts/deploy_vps.sh ubuntu@<ip>` deployed clean in ~35 min with BUILD_JOBS=1
+- [x] AWS Lightsail 1 GB Ubuntu 24.04 (ap-south-1, static IP — real address redacted, written here as `<vps-ip>`) + 2 GB swap; `bash scripts/deploy_vps.sh ubuntu@<ip>` deployed clean in ~35 min with BUILD_JOBS=1
 - [x] Lightsail firewall: TCP 22 + 14430–14433, Anywhere IPv4
 - [x] Real-WAN tunnel (2026-09-23): PQC handshake to the VPS verified live —
       `Signature type: mldsa65`, TLSv1.3, X25519MLKEM768; `curl ifconfig.me`
-      returns the VPS IP (203.0.113.5) from the laptop, `https://www.google.com`
+      returns the VPS IP (`<vps-ip>`) from the laptop, `https://www.google.com`
       returns HTTP 200 through the tunnel
 - [x] Found on the first deploy attempt: `deploy_vps.sh` enabled ufw without an
       SSH allow rule and locked the instance out (Lightsail has no serial
       console; its browser terminal is SSH too). Fixed — SSH is allowed first
       and the script verifies SSH still answers, refusing to leave ufw enabled
       without a rule.
-- [x] Real-WAN browsing verified (2026-09-24): `curl ifconfig.me` = 203.0.113.5,
+- [x] Real-WAN browsing verified (2026-09-24): `curl ifconfig.me` = `<vps-ip>`,
       `https://www.google.com` HTTP 200 in 0.43 s, `https://1.1.1.1` HTTP 301 in
       0.11 s, ping to the server's tunnel address 22–164 ms. Run with
       `PQVPN_SKIP_DNS=1` (see below).
@@ -371,7 +371,7 @@ misleading and the diagnosis is worth not repeating.
       asserted that the `vps` profile is discovered, but `client/config-vps.yaml`
       is gitignored — it holds the VPS's real public IP — so it exists on any
       machine that has deployed and in no CI checkout. Green for every
-      developer, red on every push since `e0ab505`.
+      developer, red on every push since `95678f4`.
 - [x] **Reproduced before fixing.** Built the clean-build image and deleted that
       one file: 58/58 became 57/58, and the dry-run became 92/36/7/14/57, which
       is the CI log verbatim. Expectations are now derived from the files
